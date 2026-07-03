@@ -24,9 +24,11 @@
 - Implement subject/chapter tree operations. Done for the first UI/API slice:
   root subject creation, child chapter creation, rename, guarded soft delete, guarded move, and
   selected-node path display.
-- Implement mistake create/view/edit/delete screens. Done for the first CRUD slice with node-scoped
-  lists, detail view, editing, text-tag keywords, soft delete, movement to real nodes, and simple
-  ID-based links.
+- Implement mistake create/view/edit/delete screens. Done for the first CRUD slice with scoped
+  lists that include the selected node and non-deleted descendants, detail view, editing, text-tag
+  keywords, soft delete, movement to real nodes, and simple undirected ID-based links.
+  Mistake links are treated as undirected relationships at the service/repository layer while using
+  the existing `mistake_links` table.
 - Implement attachment save/open/preview basics. Done for local file selection through main-process
   tokens, safe copy to `attachments/`, metadata persistence, soft removal, limited image preview,
   and system-default open for other file types. New attachments target only `question`,
@@ -36,7 +38,8 @@
 The subject/chapter tree module remains limited to node organization. It does not implement mistake
 CRUD, keyword search, attachment upload, export, AI, OCR, or review recommendation logic. The later
 mistake CRUD module should use `selectedNodeId` and `window.mistVault.nodes.getPath(id)` to scope
-and label mistake lists.
+and label mistake lists; a selected real node includes its descendants, while the virtual root
+lists all non-deleted node mistakes.
 
 The mistake CRUD and attachment module remains limited to persisted CRUD and attachment basics. It
 does not implement keyword search, export, data-directory migration, real AI calls, OCR, or the

@@ -54,18 +54,21 @@ type ConfirmDialogState = {
   onConfirm: () => Promise<void>;
 };
 
-const flattenNodeOptions = (nodes: NodeItem[], depth = 0): NodeOption[] =>
-  nodes.flatMap((node) => [
-    {
-      id: node.id,
-      label: `${"  ".repeat(depth)}${node.name}`
-    },
-    ...flattenNodeOptions(node.children ?? [], depth + 1)
-  ]);
+const flattenNodePathOptions = (nodes: NodeItem[], ancestors: string[] = []): NodeOption[] =>
+  nodes.flatMap((node) => {
+    const pathParts = [...ancestors, node.name];
+    return [
+      {
+        id: node.id,
+        label: pathParts.join(" / ")
+      },
+      ...flattenNodePathOptions(node.children ?? [], pathParts)
+    ];
+  });
 
 const parseSearchKeywords = (value: string): string[] =>
   value
-    .split(/[\s,，]+/)
+    .split(/[\s,，;；]+/)
     .map((keyword) => keyword.trim())
     .filter(Boolean);
 
@@ -146,14 +149,8 @@ export const App = () => {
 
   const loadMistakesForNode = useCallback(async (nodeId: string | null) => {
     setMistakeListError(null);
-
-    if (!nodeId) {
-      setMistakes([]);
-      setMistakeListLoading(false);
-      return;
-    }
-
     setMistakeListLoading(true);
+
     try {
       const result = await mistVaultApi.mistakes.listByNode(nodeId);
       if (result.ok) {
@@ -177,6 +174,7 @@ export const App = () => {
       setSearchResults([]);
       setSearchError(null);
       setSearchLoading(false);
+      await loadMistakesForNode(scopeNodeId);
       return;
     }
 
@@ -203,7 +201,7 @@ export const App = () => {
     } finally {
       setSearchLoading(false);
     }
-  }, [t]);
+  }, [loadMistakesForNode, t]);
 
   const loadAttachments = useCallback(async (mistakeId: string) => {
     const result = await mistVaultApi.attachments.listByMistake(mistakeId);
@@ -296,6 +294,18 @@ export const App = () => {
   useEffect(() => {
     void loadMistakesForNode(selectedNodeId);
   }, [loadMistakesForNode, selectedNodeId]);
+
+  useEffect(() => {
+    if (parseSearchKeywords(searchText).length === 0) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      void runSearchForScope(selectedNodeId, searchText);
+    }, 250);
+
+    return () => window.clearTimeout(timer);
+  }, [runSearchForScope, searchText, selectedNodeId]);
 
   useEffect(() => {
     if (!pendingOpenMistake || pendingOpenMistake.nodeId !== selectedNodeId) {
@@ -496,12 +506,30 @@ export const App = () => {
       setSearchActive(false);
       setSearchResults([]);
       setSearchError(null);
+      setSearchLoading(false);
       await loadMistakesForNode(selectedNodeId);
       return;
     }
 
     await runSearchForScope(selectedNodeId, searchText);
   }, [loadMistakesForNode, runSearchForScope, searchText, selectedNodeId]);
+
+  const handleSearchTextChange = useCallback(
+    (value: string) => {
+      setSearchText(value);
+
+      if (parseSearchKeywords(value).length > 0) {
+        return;
+      }
+
+      setSearchActive(false);
+      setSearchResults([]);
+      setSearchError(null);
+      setSearchLoading(false);
+      void loadMistakesForNode(selectedNodeId);
+    },
+    [loadMistakesForNode, selectedNodeId]
+  );
 
   const handleClearSearch = useCallback(async () => {
     setSearchText("");
@@ -517,12 +545,8 @@ export const App = () => {
       const nextNodeId = node?.id ?? null;
       setSelectedNodeId(nextNodeId);
       setWorkspaceMode("list");
-
-      if (parseSearchKeywords(searchText).length > 0) {
-        void runSearchForScope(nextNodeId, searchText);
-      }
     },
-    [runSearchForScope, searchText]
+    []
   );
 
   const openMistakeInWorkspace = useCallback(
@@ -747,7 +771,7 @@ export const App = () => {
     }));
   }, []);
 
-  const nodeOptions = useMemo(() => flattenNodeOptions(nodeTree), [nodeTree]);
+  const nodeOptions = useMemo(() => flattenNodePathOptions(nodeTree), [nodeTree]);
   const selectedPathText = selectedPath.length > 0 ? selectedPath.map((node) => node.name).join(" / ") : t("noSelectedNodePath");
 
   return (
@@ -808,7 +832,7 @@ export const App = () => {
               error={mistakeListError ?? selectedPathError}
               searchError={searchError}
               t={t}
-              onSearchTextChange={setSearchText}
+              onSearchTextChange={handleSearchTextChange}
               onSearchSubmit={() => void handleSearchSubmit()}
               onClearSearch={() => void handleClearSearch()}
               onCreate={startCreateMistake}
@@ -825,6 +849,7 @@ export const App = () => {
               mistake={selectedMistake}
               attachments={attachments}
               linkedMistakes={linkedMistakes}
+              nodeTree={nodeTree}
               nodeOptions={nodeOptions}
               loading={detailLoading}
               saving={saving}
@@ -847,6 +872,7 @@ export const App = () => {
               onExport={handleExportMistake}
               onRefreshAttachments={loadAttachments}
               onRemoveAttachment={handleRemoveAttachment}
+              onOpenMistake={openMistakeInWorkspace}
               onLink={handleLinkMistake}
               onUnlink={handleUnlinkMistake}
             />

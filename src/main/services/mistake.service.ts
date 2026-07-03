@@ -175,13 +175,21 @@ export class MistakeService {
     );
   }
 
-  listByNode(nodeId: string): ApiResult<Mistake[]> {
+  listByNode(nodeId: string | null): ApiResult<Mistake[]> {
+    if (nodeId !== null && (typeof nodeId !== "string" || !nodeId.trim())) {
+      return serviceFail("NODE_ID_INVALID", "Node id is invalid.");
+    }
+
     return captureServiceError(() => {
-      if (!this.nodesRepository.getById(nodeId)) {
+      const nodes = this.nodesRepository.list();
+      const nodePaths = this.buildNodePathMap(nodes);
+      const nodeIds = this.getSearchableNodeIds(nodeId, nodes, nodePaths);
+
+      if (nodeIds === null) {
         throw new Error("NODE_NOT_FOUND");
       }
 
-      return this.mistakesRepository.listByNodeId(nodeId);
+      return this.mistakesRepository.listByNodeIds(nodeIds);
     }, "MISTAKE_LIST_BY_NODE_FAILED", "Failed to list mistakes for node.");
   }
 
@@ -366,12 +374,18 @@ export class MistakeService {
     }
 
     return captureServiceError(() => {
-      if (!this.mistakesRepository.getById(sourceId) || !this.mistakesRepository.getById(targetId)) {
+      const source = this.mistakesRepository.getById(sourceId);
+      const target = this.mistakesRepository.getById(targetId);
+      if (!source || !target) {
         throw new Error("MISTAKE_NOT_FOUND");
       }
 
+      if (!this.nodesRepository.getById(source.nodeId) || !this.nodesRepository.getById(target.nodeId)) {
+        throw new Error("NODE_NOT_FOUND");
+      }
+
       if (this.mistakesRepository.hasLink(sourceId, targetId)) {
-        throw new Error("MISTAKE_LINK_DUPLICATE");
+        return { sourceId, targetId };
       }
 
       this.mistakesRepository.link(sourceId, targetId, new Date().toISOString());

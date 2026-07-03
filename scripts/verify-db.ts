@@ -115,10 +115,139 @@ assert(
   linkedMistakes[0]?.id === linkedTargetMistake.id,
   "Mistake link list returned the wrong linked mistake."
 );
+const reverseLinkedMistakes = assertOk(services.mistakeService.listLinks(linkedTargetMistake.id));
+assert(
+  reverseLinkedMistakes.length === 1 && reverseLinkedMistakes[0]?.id === mistake.id,
+  "Mistake link list should treat links as bidirectional."
+);
+assertOk(services.mistakeService.link(mistake.id, linkedTargetMistake.id));
+assertOk(services.mistakeService.link(linkedTargetMistake.id, mistake.id));
+assert(
+  assertOk(services.mistakeService.listLinks(mistake.id)).filter((item) => item.id === linkedTargetMistake.id).length === 1,
+  "Duplicate bidirectional links should not be created."
+);
+assert(
+  assertOk(services.mistakeService.listLinks(linkedTargetMistake.id)).filter((item) => item.id === mistake.id).length === 1,
+  "Reverse duplicate bidirectional links should not be created."
+);
 assertOk(services.mistakeService.unlink(mistake.id, linkedTargetMistake.id));
 assert(
   assertOk(services.mistakeService.listLinks(mistake.id)).length === 0,
-  "Mistake unlink did not remove the linked mistake."
+  "Mistake unlink did not remove the linked mistake from the source side."
+);
+assert(
+  assertOk(services.mistakeService.listLinks(linkedTargetMistake.id)).length === 0,
+  "Mistake unlink did not remove the linked mistake from the target side."
+);
+
+const legacyLinkedMistake = assertOk(
+  services.mistakeService.create({
+    nodeId: node.id,
+    question: "Legacy one-way link target",
+    keywordNames: ["math", "legacy-link"]
+  })
+).mistake;
+initializedDatabase.adapter.run(
+  `
+    INSERT INTO mistake_links (source_mistake_id, target_mistake_id, created_at)
+    VALUES (?, ?, ?)
+  `,
+  [mistake.id, legacyLinkedMistake.id, new Date().toISOString()]
+);
+assert(
+  assertOk(services.mistakeService.listLinks(legacyLinkedMistake.id)).some((item) => item.id === mistake.id),
+  "Legacy one-way links should be visible from the target side."
+);
+assertOk(services.mistakeService.unlink(legacyLinkedMistake.id, mistake.id));
+assert(
+  assertOk(services.mistakeService.listLinks(mistake.id)).length === 0 &&
+    assertOk(services.mistakeService.listLinks(legacyLinkedMistake.id)).length === 0,
+  "Unlink should remove legacy one-way links regardless of direction."
+);
+
+const deletedLinkedMistake = assertOk(
+  services.mistakeService.create({
+    nodeId: node.id,
+    question: "Deleted linked mistake",
+    keywordNames: ["math", "deleted-link"]
+  })
+).mistake;
+assertOk(services.mistakeService.link(mistake.id, deletedLinkedMistake.id));
+assertOk(services.mistakeService.softDelete(deletedLinkedMistake.id));
+assert(
+  !assertOk(services.mistakeService.listLinks(mistake.id)).some((item) => item.id === deletedLinkedMistake.id),
+  "Linked mistakes should exclude soft-deleted mistakes."
+);
+
+const deletedNode = assertOk(
+  services.nodeService.create({
+    name: "Deleted Link Scope",
+    sortOrder: 3
+  })
+);
+const deletedNodeMistake = assertOk(
+  services.mistakeService.create({
+    nodeId: deletedNode.id,
+    question: "Linked mistake under deleted node",
+    keywordNames: ["math", "deleted-node-link"]
+  })
+).mistake;
+assertOk(services.mistakeService.link(mistake.id, deletedNodeMistake.id));
+initializedDatabase.adapter.run("UPDATE nodes SET deleted_at = ?, updated_at = ? WHERE id = ?", [
+  new Date().toISOString(),
+  new Date().toISOString(),
+  deletedNode.id
+]);
+assert(
+  !assertOk(services.mistakeService.listLinks(mistake.id)).some((item) => item.id === deletedNodeMistake.id),
+  "Linked mistakes should exclude mistakes under soft-deleted nodes."
+);
+
+const childNode = assertOk(
+  services.nodeService.create({
+    parentId: node.id,
+    name: "Higher Math",
+    sortOrder: 2
+  })
+);
+const childMistake = assertOk(
+  services.mistakeService.create({
+    nodeId: childNode.id,
+    question: "What is the derivative of x^2?",
+    answerAnalysis: "2x",
+    keywordNames: ["descendant-scope"]
+  })
+).mistake;
+const parentScopedMistakes = assertOk(services.mistakeService.listByNode(node.id));
+assert(
+  parentScopedMistakes.some((item) => item.id === mistake.id),
+  "Parent node scope should include directly owned mistakes."
+);
+assert(
+  parentScopedMistakes.some((item) => item.id === childMistake.id),
+  "Parent node scope should include descendant node mistakes."
+);
+const childScopedMistakes = assertOk(services.mistakeService.listByNode(childNode.id));
+assert(
+  childScopedMistakes.length === 1 && childScopedMistakes[0]?.id === childMistake.id,
+  "Child node scope should include its own mistakes without parent mistakes."
+);
+const rootScopedMistakes = assertOk(services.mistakeService.listByNode(null));
+assert(
+  rootScopedMistakes.some((item) => item.id === mistake.id) &&
+    rootScopedMistakes.some((item) => item.id === childMistake.id),
+  "Virtual root scope should include all non-deleted node mistakes."
+);
+const descendantSearchResults = assertOk(
+  services.mistakeService.search({
+    scopeNodeId: node.id,
+    keywords: ["descendant-scope"],
+    matchMode: "OR"
+  })
+);
+assert(
+  descendantSearchResults.some((item) => item.id === childMistake.id),
+  "Scoped search should include descendant node mistakes."
 );
 
 const disabledReview = assertOk(services.reviewService.getTodayRecommendations());
@@ -311,7 +440,11 @@ assert(
 
 assertOk(services.mistakeService.softDelete(mistake.id));
 assertOk(services.mistakeService.softDelete(linkedTargetMistake.id));
+assertOk(services.mistakeService.softDelete(legacyLinkedMistake.id));
+assertOk(services.mistakeService.softDelete(deletedNodeMistake.id));
+assertOk(services.mistakeService.softDelete(childMistake.id));
 assert(assertOk(services.mistakeService.list()).length === 0, "Mistake soft delete failed.");
+assertOk(services.nodeService.softDelete(childNode.id));
 assertOk(services.nodeService.softDelete(node.id));
 assert(assertOk(services.nodeService.list()).length === 0, "Node soft delete failed.");
 

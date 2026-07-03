@@ -40,7 +40,9 @@ Review slice while keeping AI requests, OCR, packaging, and complex review algor
 
 ## Mistake CRUD And Attachments
 
-- Mistakes are scoped to a real subject/chapter node.
+- Mistakes are saved under a real subject/chapter node. Listing a selected subject/chapter returns
+  mistakes from that node plus all non-deleted descendants; listing the virtual root returns all
+  non-deleted mistakes under non-deleted nodes.
 - A mistake must have at least one keyword. Keywords are text tags only; they are never attachment
   targets and are saved through `keywords` / `mistake_keywords`.
 - A mistake must have question content through non-empty question text or at least one saved
@@ -52,6 +54,8 @@ Review slice while keeping AI requests, OCR, packaging, and complex review algor
 - Attachments are copied to the local `attachments/` directory with UUID-based stored names.
 - New attachments can be assigned only to `question`, `answerAnalysis`, or `note`. Existing
   `general` attachments are shown as legacy data but are not offered as a new attachment target.
+- Linked mistakes are undirected relationships: linking A with B makes each visible from the other,
+  duplicate reverse links are ignored, and unlinking removes the relationship from both sides.
 - The database stores attachment metadata and relative paths only.
 - The renderer never receives source absolute paths and never accesses the filesystem directly.
 - PDF, Word, txt, and unknown files are opened through the system default app in Electron main.

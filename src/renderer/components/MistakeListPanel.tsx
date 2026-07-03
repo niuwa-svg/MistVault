@@ -88,9 +88,6 @@ export const MistakeListPanel = ({
           onChange={(event) => onSearchTextChange(event.target.value)}
           placeholder={t("searchPlaceholder")}
         />
-        <button type="submit" disabled={searchLoading}>
-          {searchLoading ? t("searching") : t("search")}
-        </button>
         {searchActive || searchText ? (
           <button type="button" onClick={onClearSearch} disabled={searchLoading}>
             {t("clear")}

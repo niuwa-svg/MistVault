@@ -100,15 +100,19 @@ in local settings as a temporary implementation; later versions should move them
 
 The mistake CRUD module owns the basic local mistake lifecycle:
 
-- list mistakes for the currently selected real subject/chapter node.
+- list mistakes for the currently selected real subject/chapter node plus all non-deleted
+  descendants; the virtual root lists all non-deleted mistakes under non-deleted nodes.
 - create, view, edit, soft delete, and move mistakes.
 - validate that each mistake has at least one text keyword tag. Keywords are not content fields and
   cannot receive attachments.
 - validate that each mistake has question content through either question text or at least one
   successfully saved `question` attachment.
-- maintain simple mistake-to-mistake links by ID without implementing search.
+- maintain simple undirected mistake-to-mistake links by ID without implementing search.
 
 The module uses the existing `mistakes`, `keywords`, `mistake_keywords`, and `mistake_links` tables.
+The `mistake_links` table keeps its existing source/target column names, but service and repository
+code treat each relationship as an undirected pair: linking A to B makes B visible from A and A
+visible from B, duplicate reverse links are ignored, and unlinking removes either stored direction.
 If a mistake is created with a question attachment but no question text, the database `question`
 column stores `[题目见附件]` to remain compatible with the existing non-null schema.
 

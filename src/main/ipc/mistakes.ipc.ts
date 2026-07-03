@@ -7,7 +7,7 @@ const unavailable = () =>
   apiFail("MISTAKES_NOT_AVAILABLE", "Mistakes are unavailable until the database is ready.");
 
 export const registerMistakesIpc = (mistakeService: MistakeService | null): void => {
-  ipcMain.handle(ipcChannels.mistakesListByNode, async (_event, nodeId: string) => {
+  ipcMain.handle(ipcChannels.mistakesListByNode, async (_event, nodeId: string | null) => {
     if (!mistakeService) {
       return unavailable();
     }

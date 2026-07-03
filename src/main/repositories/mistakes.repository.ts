@@ -78,6 +78,9 @@ const keywordSeparator = "\u001f";
 const escapeLikePattern = (term: string): string =>
   `%${term.replace(/[\\%_]/g, (match) => `\\${match}`)}%`;
 
+const normalizeLinkPair = (sourceId: string, targetId: string): [string, string] =>
+  sourceId.localeCompare(targetId) <= 0 ? [sourceId, targetId] : [targetId, sourceId];
+
 export class MistakesRepository {
   constructor(
     private readonly adapter: DatabaseAdapter,
@@ -127,15 +130,24 @@ export class MistakesRepository {
   }
 
   listByNodeId(nodeId: string): Mistake[] {
+    return this.listByNodeIds([nodeId]);
+  }
+
+  listByNodeIds(nodeIds: string[]): Mistake[] {
+    if (nodeIds.length === 0) {
+      return [];
+    }
+
     return this.adapter
       .all<MistakeRow>(
         `
           SELECT ${baseFields}
           FROM mistakes
-          WHERE node_id = ? AND deleted_at IS NULL
+          WHERE node_id IN (${nodeIds.map(() => "?").join(", ")})
+            AND deleted_at IS NULL
           ORDER BY updated_at DESC, created_at DESC
         `,
-        [nodeId]
+        nodeIds
       )
       .map((row) => this.mapMistake(row));
   }
@@ -264,19 +276,25 @@ export class MistakesRepository {
   }
 
   link(sourceId: string, targetId: string, createdAt: string): void {
+    const [leftId, rightId] = normalizeLinkPair(sourceId, targetId);
+
     this.adapter.run(
       `
-        INSERT INTO mistake_links (source_mistake_id, target_mistake_id, created_at)
+        INSERT OR IGNORE INTO mistake_links (source_mistake_id, target_mistake_id, created_at)
         VALUES (?, ?, ?)
       `,
-      [sourceId, targetId, createdAt]
+      [leftId, rightId, createdAt]
     );
   }
 
   unlink(sourceId: string, targetId: string): void {
     this.adapter.run(
-      "DELETE FROM mistake_links WHERE source_mistake_id = ? AND target_mistake_id = ?",
-      [sourceId, targetId]
+      `
+        DELETE FROM mistake_links
+        WHERE (source_mistake_id = ? AND target_mistake_id = ?)
+           OR (source_mistake_id = ? AND target_mistake_id = ?)
+      `,
+      [sourceId, targetId, targetId, sourceId]
     );
   }
 
@@ -285,9 +303,10 @@ export class MistakesRepository {
       `
         SELECT COUNT(1) AS link_count
         FROM mistake_links
-        WHERE source_mistake_id = ? AND target_mistake_id = ?
+        WHERE (source_mistake_id = ? AND target_mistake_id = ?)
+           OR (source_mistake_id = ? AND target_mistake_id = ?)
       `,
-      [sourceId, targetId]
+      [sourceId, targetId, targetId, sourceId]
     );
     return (row?.link_count ?? 0) > 0;
   }
@@ -298,12 +317,25 @@ export class MistakesRepository {
         `
           SELECT ${qualifiedMistakeFields}
           FROM mistakes
-          INNER JOIN mistake_links ON mistake_links.target_mistake_id = mistakes.id
-          WHERE mistake_links.source_mistake_id = ?
+          INNER JOIN (
+            SELECT linked_mistake_id, MIN(created_at) AS linked_created_at
+            FROM (
+              SELECT target_mistake_id AS linked_mistake_id, created_at
+              FROM mistake_links
+              WHERE source_mistake_id = ?
+              UNION ALL
+              SELECT source_mistake_id AS linked_mistake_id, created_at
+              FROM mistake_links
+              WHERE target_mistake_id = ?
+            ) AS linked_candidates
+            GROUP BY linked_mistake_id
+          ) AS linked_pairs ON linked_pairs.linked_mistake_id = mistakes.id
+          INNER JOIN nodes ON nodes.id = mistakes.node_id
+          WHERE nodes.deleted_at IS NULL
             AND mistakes.deleted_at IS NULL
-          ORDER BY mistake_links.created_at
+          ORDER BY linked_pairs.linked_created_at, mistakes.updated_at DESC, mistakes.created_at DESC
         `,
-        [mistakeId]
+        [mistakeId, mistakeId]
       )
       .map((row) => this.mapMistake(row));
   }
@@ -335,17 +367,30 @@ export class MistakesRepository {
 
   private listLinkedMistakeIds(mistakeId: string): string[] {
     return this.adapter
-      .all<{ target_mistake_id: string }>(
+      .all<{ linked_mistake_id: string }>(
         `
-          SELECT mistake_links.target_mistake_id
-          FROM mistake_links
-          INNER JOIN mistakes ON mistakes.id = mistake_links.target_mistake_id
-          WHERE mistake_links.source_mistake_id = ?
+          SELECT linked_pairs.linked_mistake_id
+          FROM (
+            SELECT linked_mistake_id, MIN(created_at) AS linked_created_at
+            FROM (
+              SELECT target_mistake_id AS linked_mistake_id, created_at
+              FROM mistake_links
+              WHERE source_mistake_id = ?
+              UNION ALL
+              SELECT source_mistake_id AS linked_mistake_id, created_at
+              FROM mistake_links
+              WHERE target_mistake_id = ?
+            ) AS linked_candidates
+            GROUP BY linked_mistake_id
+          ) AS linked_pairs
+          INNER JOIN mistakes ON mistakes.id = linked_pairs.linked_mistake_id
+          INNER JOIN nodes ON nodes.id = mistakes.node_id
+          WHERE nodes.deleted_at IS NULL
             AND mistakes.deleted_at IS NULL
-          ORDER BY mistake_links.created_at
+          ORDER BY linked_pairs.linked_created_at, mistakes.updated_at DESC, mistakes.created_at DESC
         `,
-        [mistakeId]
+        [mistakeId, mistakeId]
       )
-      .map((row) => row.target_mistake_id);
+      .map((row) => row.linked_mistake_id);
   }
 }

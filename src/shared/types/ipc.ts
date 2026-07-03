@@ -67,7 +67,7 @@ export type MistVaultApi = {
     getPath: (id: string) => Promise<ApiResult<NodeItem[]>>;
   };
   mistakes: {
-    listByNode: (nodeId: string) => Promise<ApiResult<Mistake[]>>;
+    listByNode: (nodeId: string | null) => Promise<ApiResult<Mistake[]>>;
     get: (id: string) => Promise<ApiResult<Mistake>>;
     create: (input: CreateMistakeInput) => Promise<ApiResult<MistakeSaveResult>>;
     update: (id: string, input: UpdateMistakeInput) => Promise<ApiResult<MistakeSaveResult>>;

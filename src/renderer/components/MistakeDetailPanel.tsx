@@ -5,6 +5,8 @@ import type {
   AttachmentPreviewResult,
   CreateMistakeInput,
   Mistake,
+  NodeItem,
+  SearchMistakeResult,
   StagedAttachment,
   UpdateMistakeInput,
   WritableAttachmentField
@@ -32,6 +34,7 @@ type MistakeDetailPanelProps = {
   mistake: Mistake | null;
   attachments: Attachment[];
   linkedMistakes: Mistake[];
+  nodeTree: NodeItem[];
   nodeOptions: NodeOption[];
   loading: boolean;
   saving: boolean;
@@ -48,15 +51,21 @@ type MistakeDetailPanelProps = {
   onExport: (mistake: Mistake) => void;
   onRefreshAttachments: (mistakeId: string) => Promise<void>;
   onRemoveAttachment: (attachment: Attachment) => void;
-  onLink: (sourceId: string, targetId: string) => void;
-  onUnlink: (sourceId: string, targetId: string) => void;
+  onOpenMistake: (mistakeId: string, nodeId: string) => void;
+  onLink: (sourceId: string, targetId: string) => Promise<void>;
+  onUnlink: (sourceId: string, targetId: string) => Promise<void>;
 };
 
-const writableAttachmentFields: { value: WritableAttachmentField; key: TranslationKey }[] = [
-  { value: "question", key: "question" },
-  { value: "answerAnalysis", key: "answerAnalysis" },
-  { value: "note", key: "note" }
-];
+type LinkCandidate = {
+  id: string;
+  nodeId: string;
+  question: string;
+  keywords: string[];
+  nodePath?: string[];
+  updatedAt: string;
+};
+
+type LinkedPathState = Record<string, string>;
 
 const attachmentDisplayFields: { value: AttachmentField; key: TranslationKey }[] = [
   { value: "question", key: "questionAttachments" },
@@ -104,6 +113,41 @@ const formatDate = (value: string): string => {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 };
 
+const summarize = (text: string): string => {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  return normalized.length > 90 ? `${normalized.slice(0, 90)}...` : normalized;
+};
+
+const findNodePath = (nodes: NodeItem[], targetId: string): NodeItem[] => {
+  for (const node of nodes) {
+    if (node.id === targetId) {
+      return [node];
+    }
+
+    const childPath = findNodePath(node.children ?? [], targetId);
+    if (childPath.length > 0) {
+      return [node, ...childPath];
+    }
+  }
+
+  return [];
+};
+
+const findNodeById = (nodes: NodeItem[], targetId: string): NodeItem | null => {
+  for (const node of nodes) {
+    if (node.id === targetId) {
+      return node;
+    }
+
+    const child = findNodeById(node.children ?? [], targetId);
+    if (child) {
+      return child;
+    }
+  }
+
+  return null;
+};
+
 const AttachmentPreview = ({ attachment, t }: { attachment: Attachment; t: MistakeDetailPanelProps["t"] }) => {
   const [preview, setPreview] = useState<AttachmentPreviewResult | null>(null);
 
@@ -141,6 +185,7 @@ export const MistakeDetailPanel = ({
   mistake,
   attachments,
   linkedMistakes,
+  nodeTree,
   nodeOptions,
   loading,
   saving,
@@ -157,6 +202,7 @@ export const MistakeDetailPanel = ({
   onExport,
   onRefreshAttachments,
   onRemoveAttachment,
+  onOpenMistake,
   onLink,
   onUnlink
 }: MistakeDetailPanelProps) => {
@@ -166,9 +212,14 @@ export const MistakeDetailPanel = ({
   const [answerAnalysis, setAnswerAnalysis] = useState("");
   const [note, setNote] = useState("");
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
-  const [attachmentField, setAttachmentField] = useState<WritableAttachmentField>("question");
   const [moveTargetId, setMoveTargetId] = useState("");
-  const [linkTargetId, setLinkTargetId] = useState("");
+  const [linkDialogOpen, setLinkDialogOpen] = useState(false);
+  const [linkScopePath, setLinkScopePath] = useState<string[]>([]);
+  const [linkSearchText, setLinkSearchText] = useState("");
+  const [linkCandidates, setLinkCandidates] = useState<LinkCandidate[]>([]);
+  const [linkLoading, setLinkLoading] = useState(false);
+  const [linkError, setLinkError] = useState<string | null>(null);
+  const [linkedPaths, setLinkedPaths] = useState<LinkedPathState>({});
   const [localError, setLocalError] = useState<string | null>(null);
 
   const editing = mode === "create" || mode === "edit";
@@ -210,8 +261,43 @@ export const MistakeDetailPanel = ({
     setMoveTargetId(nodeOptions.find((node) => node.id !== mistake?.nodeId)?.id ?? "");
   }, [mistake?.nodeId, nodeOptions]);
 
-  const fieldLabel = (field: AttachmentField | WritableAttachmentField): string =>
-    t(attachmentDisplayFields.find((item) => item.value === field)?.key ?? writableAttachmentFields.find((item) => item.value === field)?.key ?? "attachments");
+  useEffect(() => {
+    if (!mistake?.nodeId) {
+      setLinkScopePath([]);
+      return;
+    }
+
+    setLinkScopePath(findNodePath(nodeTree, mistake.nodeId).map((node) => node.id));
+  }, [mistake?.nodeId, nodeTree]);
+
+  useEffect(() => {
+    let active = true;
+    const loadLinkedPaths = async () => {
+      const entries = await Promise.all(
+        linkedMistakes.map(async (linked) => {
+          const result = await mistVaultApi.nodes.getPath(linked.nodeId);
+          return [
+            linked.id,
+            result.ok ? result.data.map((node) => node.name).join(" / ") : t("pathLoadFailed")
+          ] as const;
+        })
+      );
+
+      if (active) {
+        setLinkedPaths(Object.fromEntries(entries));
+      }
+    };
+
+    if (linkedMistakes.length === 0) {
+      setLinkedPaths({});
+      return;
+    }
+
+    void loadLinkedPaths();
+    return () => {
+      active = false;
+    };
+  }, [linkedMistakes, t]);
 
   const commitKeywordDraft = (value = keywordDraft) => {
     const nextKeywords = parseKeywords(value);
@@ -224,7 +310,7 @@ export const MistakeDetailPanel = ({
     setKeywordDraft("");
   };
 
-  const choosePendingAttachments = async () => {
+  const choosePendingAttachments = async (field: WritableAttachmentField) => {
     setLocalError(null);
     const result = await mistVaultApi.attachments.chooseFiles();
     if (!result.ok) {
@@ -234,7 +320,7 @@ export const MistakeDetailPanel = ({
 
     setPendingAttachments((current) => [
       ...current,
-      ...result.data.map((attachment) => ({ ...attachment, field: attachmentField }))
+      ...result.data.map((attachment) => ({ ...attachment, field }))
     ]);
   };
 
@@ -273,6 +359,185 @@ export const MistakeDetailPanel = ({
     if (!result.ok) {
       setLocalError(result.error.message);
     }
+  };
+
+  const closeLinkDialog = () => {
+    setLinkDialogOpen(false);
+    setLinkSearchText("");
+    setLinkCandidates([]);
+    setLinkError(null);
+    setLinkLoading(false);
+    setLinkScopePath(mistake?.nodeId ? findNodePath(nodeTree, mistake.nodeId).map((node) => node.id) : []);
+  };
+
+  const filterLinkCandidates = (candidates: LinkCandidate[]): LinkCandidate[] => {
+    if (!mistake) {
+      return [];
+    }
+
+    const linkedIds = new Set(linkedMistakes.map((linked) => linked.id));
+    return candidates.filter((candidate) => candidate.id !== mistake.id && !linkedIds.has(candidate.id));
+  };
+
+  const loadLinkCandidatesByNode = async () => {
+    const linkScopeNodeId = linkScopePath[linkScopePath.length - 1] ?? "";
+    if (!linkScopeNodeId) {
+      setLinkError(t("chooseCandidateScope"));
+      return;
+    }
+
+    setLinkLoading(true);
+    setLinkError(null);
+    try {
+      const result = await mistVaultApi.mistakes.listByNode(linkScopeNodeId);
+      if (!result.ok) {
+        setLinkError(result.error.message);
+        return;
+      }
+
+      setLinkCandidates(
+        filterLinkCandidates(
+          result.data
+            .filter((item) => !item.deletedAt)
+            .map((item) => ({
+              id: item.id,
+              nodeId: item.nodeId,
+              question: item.question,
+              keywords: item.keywords.map((keyword) => keyword.name),
+              updatedAt: item.updatedAt
+            }))
+        )
+      );
+    } catch {
+      setLinkError(t("loadCandidatesFailed"));
+    } finally {
+      setLinkLoading(false);
+    }
+  };
+
+  const searchLinkCandidates = async () => {
+    const keywords = parseKeywords(linkSearchText);
+    const linkScopeNodeId = linkScopePath[linkScopePath.length - 1] ?? "";
+    if (keywords.length === 0) {
+      setLinkError(t("keywordSearchRequired"));
+      return;
+    }
+
+    setLinkLoading(true);
+    setLinkError(null);
+    try {
+      const result = await mistVaultApi.mistakes.search({
+        scopeNodeId: linkScopeNodeId || null,
+        keywords,
+        matchMode: "OR",
+        limit: 50,
+        offset: 0
+      });
+      if (!result.ok) {
+        setLinkError(result.error.message);
+        return;
+      }
+
+      setLinkCandidates(
+        filterLinkCandidates(
+          result.data.map((item: SearchMistakeResult) => ({
+            id: item.id,
+            nodeId: item.nodeId,
+            question: item.question,
+            keywords: item.keywords,
+            nodePath: item.nodePath,
+            updatedAt: item.updatedAt
+          }))
+        )
+      );
+    } catch {
+      setLinkError(t("loadCandidatesFailed"));
+    } finally {
+      setLinkLoading(false);
+    }
+  };
+
+  const linkCandidate = async (candidate: LinkCandidate) => {
+    if (!mistake) {
+      return;
+    }
+
+    setLinkError(null);
+    await onLink(mistake.id, candidate.id);
+    closeLinkDialog();
+  };
+
+  const renderPendingAttachmentsForField = (field: WritableAttachmentField) => {
+    const fieldAttachments = pendingAttachments.filter((attachment) => attachment.field === field);
+    if (fieldAttachments.length === 0) {
+      return <p className="state-text compact-state">{t("noAttachments")}</p>;
+    }
+
+    return (
+      <ul className="pending-attachments field-pending-attachments">
+        {fieldAttachments.map((attachment) => (
+          <li key={attachment.token}>
+            <span>{attachment.originalName} · {formatSize(attachment.size)}</span>
+            <button
+              type="button"
+              onClick={() =>
+                setPendingAttachments((current) =>
+                  current.filter((item) => item.token !== attachment.token)
+                )
+              }
+            >
+              {t("remove")}
+            </button>
+          </li>
+        ))}
+      </ul>
+    );
+  };
+
+  const renderLinkScopeSelectors = () => {
+    const levels: NodeItem[][] = [nodeTree];
+    for (const selectedId of linkScopePath) {
+      const selectedNode = findNodeById(nodeTree, selectedId);
+      if (!selectedNode || (selectedNode.children ?? []).length === 0) {
+        break;
+      }
+      levels.push(selectedNode.children ?? []);
+    }
+
+    return (
+      <div className="link-scope-cascade">
+        {levels.map((items, index) => {
+          const value = linkScopePath[index] ?? "";
+          return (
+            <label key={index} className="modal-field">
+              <span>{index === 0 ? t("topLevelSubject") : t("childChapter")}</span>
+              <select
+                value={value}
+                onChange={(event) => {
+                  const nextValue = event.target.value;
+                  setLinkScopePath((current) => {
+                    const next = current.slice(0, index);
+                    if (nextValue) {
+                      next.push(nextValue);
+                    }
+                    return next;
+                  });
+                  setLinkCandidates([]);
+                  setLinkError(null);
+                }}
+              >
+                <option value="">{index === 0 ? t("chooseSubject") : t("chooseChildChapter")}</option>
+                {items.map((node) => (
+                  <option key={node.id} value={node.id}>
+                    {node.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          );
+        })}
+      </div>
+    );
   };
 
   const handleSubmit = async () => {
@@ -401,11 +666,20 @@ export const MistakeDetailPanel = ({
       {editing ? (
         <div className="mistake-form editor-surface">
           <section className="form-section form-section-primary">
-            <div>
-              <h2>{t("question")}</h2>
-              <p>{t("questionHelp")}</p>
+            <div className="form-section-heading">
+              <div>
+                <h2>{t("question")}</h2>
+                <p>{t("questionHelp")}</p>
+              </div>
+              <button type="button" onClick={() => void choosePendingAttachments("question")}>
+                {t("addQuestionAttachment")}
+              </button>
             </div>
             <textarea value={question} onChange={(event) => setQuestion(event.target.value)} />
+            <div className="field-attachment-area">
+              <h3>{t("questionAttachments")}</h3>
+              {renderPendingAttachmentsForField("question")}
+            </div>
           </section>
 
           <section className="form-section">
@@ -452,44 +726,37 @@ export const MistakeDetailPanel = ({
           </section>
 
           <section className="form-section form-section-primary">
-            <div>
-              <h2>{t("answerAnalysis")}</h2>
-              <p>{t("answerHelp")}</p>
+            <div className="form-section-heading">
+              <div>
+                <h2>{t("answerAnalysis")}</h2>
+                <p>{t("answerHelp")}</p>
+              </div>
+              <button type="button" onClick={() => void choosePendingAttachments("answerAnalysis")}>
+                {t("addAnswerAttachment")}
+              </button>
             </div>
             <textarea value={answerAnalysis} onChange={(event) => setAnswerAnalysis(event.target.value)} />
+            <div className="field-attachment-area">
+              <h3>{t("answerAttachments")}</h3>
+              {renderPendingAttachmentsForField("answerAnalysis")}
+            </div>
           </section>
 
           <section className="form-section">
-            <div>
-              <h2>{t("note")}</h2>
-              <p>{t("noteHelp")}</p>
+            <div className="form-section-heading">
+              <div>
+                <h2>{t("note")}</h2>
+                <p>{t("noteHelp")}</p>
+              </div>
+              <button type="button" onClick={() => void choosePendingAttachments("note")}>
+                {t("addNoteAttachment")}
+              </button>
             </div>
             <textarea value={note} onChange={(event) => setNote(event.target.value)} />
-          </section>
-
-          <section className="form-section">
-            <div className="section-heading-row">
-              <div>
-                <h2>{t("pendingAttachments")}</h2>
-                <p>{t("addTo")}: {fieldLabel(attachmentField)}</p>
-              </div>
-              <div className="attachment-picker">
-                <select value={attachmentField} onChange={(event) => setAttachmentField(event.target.value as WritableAttachmentField)}>
-                  {writableAttachmentFields.map((field) => <option key={field.value} value={field.value}>{t(field.key)}</option>)}
-                </select>
-                <button type="button" onClick={choosePendingAttachments}>{t("chooseFiles")}</button>
-              </div>
+            <div className="field-attachment-area">
+              <h3>{t("noteAttachments")}</h3>
+              {renderPendingAttachmentsForField("note")}
             </div>
-            {pendingAttachments.length > 0 ? (
-              <ul className="pending-attachments">
-                {pendingAttachments.map((attachment) => (
-                  <li key={attachment.token}>
-                    <span>{attachment.originalName} · {fieldLabel(attachment.field)} · {formatSize(attachment.size)}</span>
-                    <button type="button" onClick={() => setPendingAttachments((current) => current.filter((item) => item.token !== attachment.token))}>{t("remove")}</button>
-                  </li>
-                ))}
-              </ul>
-            ) : <p className="state-text compact-state">{t("noAttachments")}</p>}
           </section>
 
           <div className="sticky-form-actions">
@@ -540,26 +807,108 @@ export const MistakeDetailPanel = ({
               <h3>{t("moveMistake")}</h3>
               <div className="move-row">
                 <select value={moveTargetId} onChange={(event) => setMoveTargetId(event.target.value)}>
-                  {nodeOptions.filter((node) => node.id !== mistake.nodeId).map((node) => <option key={node.id} value={node.id}>{node.label}</option>)}
+                  {nodeOptions.map((node) => {
+                    const current = node.id === mistake.nodeId;
+                    const label = current ? `${node.label}（${t("currentDirectory")}）` : node.label;
+                    return (
+                      <option key={node.id} value={node.id} disabled={current} title={label}>
+                        {label}
+                      </option>
+                    );
+                  })}
                 </select>
-                <button type="button" disabled={!moveTargetId} onClick={() => onMove(mistake, moveTargetId)}>{t("move")}</button>
+                <button type="button" disabled={!moveTargetId || moveTargetId === mistake.nodeId} onClick={() => onMove(mistake, moveTargetId)}>{t("move")}</button>
               </div>
             </div>
             <div className="tool-card">
               <h3>{t("linkedMistakes")}</h3>
-              <div className="move-row">
-                <input value={linkTargetId} onChange={(event) => setLinkTargetId(event.target.value)} placeholder={t("existingMistakeId")} />
-                <button type="button" onClick={() => { onLink(mistake.id, linkTargetId.trim()); setLinkTargetId(""); }} disabled={!linkTargetId.trim()}>{t("linkMistake")}</button>
-              </div>
+              <button type="button" onClick={() => setLinkDialogOpen(true)}>{t("addLinkedMistake")}</button>
               {linkedMistakes.length === 0 ? <p className="state-text compact-state">{t("noLinkedMistakes")}</p> : null}
               {linkedMistakes.map((linked) => (
-                <div key={linked.id} className="linked-mistake-row">
-                  <span>{linked.question}</span>
-                  <button type="button" onClick={() => onUnlink(mistake.id, linked.id)}>{t("unlink")}</button>
-                </div>
+                <article
+                  key={linked.id}
+                  className="linked-mistake-card"
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => onOpenMistake(linked.id, linked.nodeId)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      onOpenMistake(linked.id, linked.nodeId);
+                    }
+                  }}
+                >
+                  <div>
+                    <strong>{summarize(linked.question) || t("untitledMistake")}</strong>
+                    <span>{linked.keywords.length > 0 ? linked.keywords.map((keyword) => keyword.name).join(" · ") : t("noKeywords")}</span>
+                    <span>{linkedPaths[linked.id] ?? t("loadingPath")}</span>
+                  </div>
+                  <div className="detail-actions">
+                    <button type="button" onClick={(event) => { event.stopPropagation(); onOpenMistake(linked.id, linked.nodeId); }}>{t("open")}</button>
+                    <button type="button" onClick={(event) => { event.stopPropagation(); void onUnlink(mistake.id, linked.id); }}>{t("unlink")}</button>
+                  </div>
+                </article>
               ))}
             </div>
           </section>
+
+          {linkDialogOpen ? (
+            <div className="modal-backdrop" role="presentation">
+              <section className="modal-panel link-picker-dialog" role="dialog" aria-modal="true" aria-labelledby="link-picker-title">
+                <div className="panel-heading">
+                  <h3 id="link-picker-title">{t("addLinkedMistake")}</h3>
+                  <button type="button" onClick={closeLinkDialog}>{t("close")}</button>
+                </div>
+                <p>{t("linkPickerHelp")}</p>
+
+                <div className="modal-field">
+                  <span>{t("candidateScope")}</span>
+                  {renderLinkScopeSelectors()}
+                </div>
+
+                <div className="link-picker-actions">
+                  <button type="button" onClick={() => void loadLinkCandidatesByNode()} disabled={linkLoading || linkScopePath.length === 0}>
+                    {linkLoading ? t("loadingCandidates") : t("browseNodeMistakes")}
+                  </button>
+                </div>
+
+                <form
+                  className="link-search-row"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void searchLinkCandidates();
+                  }}
+                >
+                  <input
+                    value={linkSearchText}
+                    onChange={(event) => setLinkSearchText(event.target.value)}
+                    placeholder={t("keywordSearchPlaceholder")}
+                  />
+                  <button type="submit" disabled={linkLoading}>{t("searchByKeyword")}</button>
+                </form>
+
+                {linkError ? <p className="state-text state-error">{linkError}</p> : null}
+                {linkLoading ? <p className="state-text">{t("loadingCandidates")}</p> : null}
+                {!linkLoading && linkCandidates.length === 0 ? <p className="state-text">{t("noLinkCandidates")}</p> : null}
+
+                <div className="link-candidate-list">
+                  {linkCandidates.map((candidate) => (
+                    <article key={candidate.id} className="link-candidate-card">
+                      <div>
+                        <strong>{summarize(candidate.question) || t("untitledMistake")}</strong>
+                        <span>{candidate.keywords.length > 0 ? candidate.keywords.join(" · ") : t("noKeywords")}</span>
+                        <span>{candidate.nodePath ? candidate.nodePath.join(" / ") : t("candidatePathFromScope")}</span>
+                        <time>{t("updatedAt")}: {formatDate(candidate.updatedAt)}</time>
+                      </div>
+                      <button type="button" onClick={() => void linkCandidate(candidate)}>
+                        {t("linkMistake")}
+                      </button>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            </div>
+          ) : null}
         </article>
       ) : null}
     </section>

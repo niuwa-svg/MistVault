@@ -34,7 +34,9 @@ the migrated data-directory payload.
 - `keywords`: unique keyword labels.
 - `mistake_keywords`: many-to-many mistake/keyword links.
 - `attachments`: attachment metadata, relative path, size, hash, and soft delete.
-- `mistake_links`: mistake-to-mistake links with a check preventing self-links.
+- `mistake_links`: mistake-to-mistake links with a check preventing self-links. Services treat
+  each row as an undirected relationship even though the stored column names are
+  `source_mistake_id` and `target_mistake_id`.
 - `settings`: local key/value settings stored as JSON text.
 - `review_states`: local state for optional today-review recommendations.
 
@@ -50,11 +52,12 @@ The mistake CRUD module uses the existing schema without a new migration.
 - `keywords` stores unique keyword labels and `mistake_keywords` stores the many-to-many relation.
 - Service code trims empty keywords and prevents duplicate keyword labels on the same mistake.
   Keywords are text tags only and never have attachment metadata.
+- Mistake listing and keyword search both scope through non-deleted nodes and exclude soft-deleted
+  mistakes. The virtual MistVault root covers all mistakes under non-deleted nodes. A real node
+  scope covers that node plus all non-deleted descendants.
 - Keyword search reuses `keywords`, `mistake_keywords`, `mistakes`, and `nodes` without a schema
-  change. It searches keyword names with parameterized SQLite `LIKE`, scopes by non-deleted nodes,
-  excludes soft-deleted mistakes, and returns node paths as string arrays for renderer display.
-- The virtual MistVault root search covers all mistakes under non-deleted nodes. A real node search
-  covers that node plus all non-deleted descendants.
+  change. It searches keyword names with parameterized SQLite `LIKE` and returns node paths as
+  string arrays for renderer display.
 
 Attachments are copied to the local data directory before metadata is saved:
 
@@ -84,6 +87,10 @@ The export module reads existing `mistakes`, `keywords`, `mistake_keywords`, `no
 - The first list/search export uses the mistake IDs currently loaded in the UI, not every possible
   database match for a search query.
 
+Mistake links are user-facing undirected relationships. New writes store one normalized pair using
+the existing `source_mistake_id` / `target_mistake_id` columns. Reads and deletes check both
+directions so old one-way rows remain compatible without a migration.
+
 ## Nodes Table
 
 The subject/chapter tree is stored in `nodes`.
@@ -101,8 +108,9 @@ Deletion and movement are protected by service-layer rules:
 - Moving to the virtual root is stored as `parent_id = null`.
 - A node cannot be moved under itself or under its descendants.
 
-Future mistake CRUD should use `node_id` to scope mistakes to the currently selected node and may
-use the node path API to display location context.
+Mistake CRUD uses `node_id` as the stored ownership field, while list/search services expand a
+selected node into that node plus all non-deleted descendants. The node path API provides location
+context for display.
 
 ## Access Rule
 

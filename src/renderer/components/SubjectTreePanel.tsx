@@ -84,16 +84,17 @@ const buildMoveTargets = (nodes: NodeItem[], movingNode: NodeItem): MoveTarget[]
   excludedIds.add(movingNode.id);
   const targets: MoveTarget[] = [{ id: null, label: "MistVault root" }];
 
-  const visit = (items: NodeItem[], depth: number) => {
+  const visit = (items: NodeItem[], ancestors: string[]) => {
     for (const item of items) {
       if (!excludedIds.has(item.id)) {
-        targets.push({ id: item.id, label: `${"  ".repeat(depth)}${item.name}` });
-        visit(item.children ?? [], depth + 1);
+        const pathParts = [...ancestors, item.name];
+        targets.push({ id: item.id, label: pathParts.join(" / ") });
+        visit(item.children ?? [], pathParts);
       }
     }
   };
 
-  visit(nodes, 0);
+  visit(nodes, []);
   return targets;
 };
 
@@ -117,6 +118,7 @@ export const SubjectTreePanel = ({
   const [nameDialog, setNameDialog] = useState<NameDialogState | null>(null);
   const [nameValue, setNameValue] = useState("");
   const [nameError, setNameError] = useState<string | null>(null);
+  const [actionMenuNodeId, setActionMenuNodeId] = useState<string | null>(null);
   const moveTargets = useMemo(() => (moveState ? buildMoveTargets(nodes, moveState.node) : []), [moveState, nodes]);
 
   useEffect(() => {
@@ -232,24 +234,42 @@ export const SubjectTreePanel = ({
               <button
                 type="button"
                 className="tree-node-name"
+                title={node.name}
                 onClick={() => onSelect(node)}
                 disabled={operationLoading}
               >
                 <span>{node.name}</span>
               </button>
               <div className="tree-node-actions">
-                <button type="button" onClick={() => openCreateDialog(node.id)} disabled={operationLoading}>
-                  {t("addChild")}
+                <button
+                  type="button"
+                  className="tree-more-button"
+                  aria-expanded={actionMenuNodeId === node.id}
+                  aria-label={t("moreActions")}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setActionMenuNodeId((current) => current === node.id ? null : node.id);
+                  }}
+                  disabled={operationLoading}
+                >
+                  ⋯
                 </button>
-                <button type="button" onClick={() => openRenameDialog(node)} disabled={operationLoading}>
-                  {t("rename")}
-                </button>
-                <button type="button" onClick={() => setMoveState({ node, targetParentId: node.parentId })} disabled={operationLoading}>
-                  {t("move")}
-                </button>
-                <button type="button" onClick={() => onDelete(node)} disabled={operationLoading}>
-                  {t("delete")}
-                </button>
+                {actionMenuNodeId === node.id ? (
+                  <div className="tree-action-menu">
+                    <button type="button" onClick={() => { openCreateDialog(node.id); setActionMenuNodeId(null); }} disabled={operationLoading}>
+                      {t("addChild")}
+                    </button>
+                    <button type="button" onClick={() => { openRenameDialog(node); setActionMenuNodeId(null); }} disabled={operationLoading}>
+                      {t("rename")}
+                    </button>
+                    <button type="button" onClick={() => { setMoveState({ node, targetParentId: node.parentId }); setActionMenuNodeId(null); }} disabled={operationLoading}>
+                      {t("move")}
+                    </button>
+                    <button type="button" onClick={() => { onDelete(node); setActionMenuNodeId(null); }} disabled={operationLoading}>
+                      {t("delete")}
+                    </button>
+                  </div>
+                ) : null}
               </div>
             </div>
             {hasChildren && expanded ? renderNodes(children, depth + 1) : null}
