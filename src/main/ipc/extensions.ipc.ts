@@ -3,19 +3,37 @@ import { apiFail, apiOk, ipcChannels } from "@shared/types";
 import { getNoopAiStatus } from "../extensions/ai/noopAiProvider";
 import { getNoopOcrStatus } from "../extensions/ocr/noopOcrProvider";
 import { getNoopReviewStatus } from "../extensions/review/noopReviewScheduler";
-import type { ReviewService } from "../services";
+import type { AiService, ReviewService } from "../services";
 
 const reviewUnavailable = () =>
   apiFail("REVIEW_NOT_AVAILABLE", "Review recommendations are unavailable until the database is ready.");
 
-export const registerExtensionsIpc = (reviewService: ReviewService | null = null): void => {
+export const registerExtensionsIpc = (
+  aiService: AiService | null = null,
+  reviewService: ReviewService | null = null
+): void => {
   ipcMain.handle(ipcChannels.extensionAiGetStatus, async () => {
     try {
-      return apiOk(getNoopAiStatus());
+      return aiService ? aiService.getStatus() : apiOk(getNoopAiStatus());
     } catch (error) {
       return apiFail("AI_STATUS_FAILED", "Failed to read AI extension status.", error);
     }
   });
+
+  ipcMain.handle(
+    ipcChannels.extensionAiExplainMistake,
+    async (_event, mistakeId: string, userQuestion?: string) => {
+      if (!aiService) {
+        return apiFail("AI_NOT_CONFIGURED", "AI is unavailable until the database is ready.");
+      }
+
+      try {
+        return await aiService.explainMistake(mistakeId, userQuestion);
+      } catch {
+        return apiFail("AI_UNKNOWN_ERROR", "AI explanation failed.");
+      }
+    }
+  );
 
   ipcMain.handle(ipcChannels.extensionOcrGetStatus, async () => {
     try {

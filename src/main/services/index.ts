@@ -8,6 +8,7 @@ import {
   ReviewRepository,
   SettingsRepository
 } from "../repositories";
+import { AiService } from "../extensions/ai/ai.service";
 import { ExportService } from "../export";
 import { AttachmentService } from "./attachment.service";
 import { DatabaseService } from "./database.service";
@@ -18,6 +19,7 @@ import { SettingsService } from "./settings.service";
 import { StorageService } from "./storage.service";
 
 export type CoreServices = {
+  aiService: AiService;
   attachmentService: AttachmentService;
   databaseService: DatabaseService;
   exportService: ExportService;
@@ -49,8 +51,20 @@ export const createCoreServices = (
   );
 
   const reviewService = new ReviewService(reviewRepository, nodesRepository, settingsRepository);
+  const settingsService = new SettingsService(settingsRepository, dataDirectoryInfo);
+  const nodeService = new NodeService(nodesRepository, mistakesRepository);
+  const mistakeService = new MistakeService(
+    adapter,
+    nodesRepository,
+    mistakesRepository,
+    keywordsRepository,
+    attachmentService,
+    reviewService
+  );
+  const aiService = new AiService(settingsService, mistakeService, attachmentService, nodeService);
 
   return {
+    aiService,
     attachmentService,
     databaseService: new DatabaseService(databaseStatus),
     exportService: new ExportService(
@@ -60,22 +74,16 @@ export const createCoreServices = (
       dataDirectoryInfo,
       settingsRepository
     ),
-    mistakeService: new MistakeService(
-      adapter,
-      nodesRepository,
-      mistakesRepository,
-      keywordsRepository,
-      attachmentService,
-      reviewService
-    ),
-    nodeService: new NodeService(nodesRepository, mistakesRepository),
+    mistakeService,
+    nodeService,
     reviewService,
-    settingsService: new SettingsService(settingsRepository, dataDirectoryInfo),
+    settingsService,
     storageService: new StorageService(dataDirectoryInfo, appUserDataPath, appPath)
   };
 };
 
 export { AttachmentService } from "./attachment.service";
+export { AiService } from "../extensions/ai/ai.service";
 export { DatabaseService } from "./database.service";
 export { ExportService } from "../export";
 export { MistakeService } from "./mistake.service";

@@ -21,5 +21,5 @@ export const registerIpcHandlers = (
   registerMistakesIpc(services?.mistakeService ?? null);
   registerAttachmentsIpc(services?.attachmentService ?? null);
   registerExportIpc(services?.exportService ?? null);
-  registerExtensionsIpc(services?.reviewService ?? null);
+  registerExtensionsIpc(services?.aiService ?? null, services?.reviewService ?? null);
 };

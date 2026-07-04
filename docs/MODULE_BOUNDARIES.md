@@ -31,7 +31,8 @@ formats, and database-wide full-result export are follow-up work.
 
 ## Extension Modules
 
-- `extensions/ai`: noop provider only.
+- `extensions/ai`: optional text-only AI explanation provider adapters, isolated behind main-process
+  services.
 - `extensions/ocr`: noop provider only.
 - `extensions/review`: local today-review recommendation API backed by `review_states`.
 
@@ -79,7 +80,7 @@ The settings module owns local preferences only:
 - backup preference and backup directory preference.
 - data-directory migration orchestration.
 - database type preference with SQLite as the active default and MySQL as an advanced disabled entry.
-- AI provider configuration entry without real AI requests.
+- AI provider configuration for the optional text-only explanation extension.
 - OCR and review recommendation placeholder preferences.
 
 Settings are read and saved through Electron main services and the whitelisted
@@ -92,9 +93,34 @@ the active SQLite connection and never deletes the old data directory. The stabl
 is written under Electron `app.getPath("userData")`, outside the migrated data-directory payload.
 
 AI API keys and MySQL passwords are accepted only as settings input. Read APIs return only
-configured/not-configured state and never return secret values. The first version stores these values
-in local settings as a temporary implementation; later versions should move them to Electron
-`safeStorage` or an OS credential store.
+configured/not-configured state and never return secret values. The AI explanation service may read
+private AI settings only inside Electron main; that private read path is not exposed through IPC or
+preload. The first version stores these values in local settings as a temporary implementation;
+later versions should move them to Electron `safeStorage` or an OS credential store.
+
+## AI Explanation Boundary
+
+The AI explanation module owns only on-demand text explanations for the currently selected mistake:
+
+- read AI settings and API key in Electron main only.
+- read the requested mistake, node path, and attachment metadata through main services.
+- call OpenAI-compatible providers through a small fetch-based adapter.
+- return a single non-streaming Chinese answer to the renderer AI panel.
+- return Claude and Gemini as unsupported in the first version.
+
+The AI request payload must include only current mistake context: question, keywords,
+answer/analysis, note, node path, and safe attachment metadata. Attachment metadata is limited to
+original display name, MIME type or extension, field, and size.
+
+The AI module must not send attachment files, attachment contents, image data URLs, base64,
+attachment IDs unless needed, stored filenames, `relativePath`, absolute local paths, data-directory
+paths, the whole mistake library, or unrelated mistakes. It must not persist AI answers, write to
+notes, run OCR, parse documents, use multimodal input, stream responses, install SDKs, add
+dependencies, change database schema, or create migrations.
+
+AI failures are isolated to the AI panel. They must not prevent subject/chapter tree loading,
+mistake CRUD, attachments, keyword search, export, settings, Today Review, or OCR placeholders from
+working.
 
 ## Mistake CRUD Boundary
 

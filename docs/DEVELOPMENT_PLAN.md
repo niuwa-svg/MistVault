@@ -75,15 +75,20 @@ attachments APIs instead of reading the database or filesystem directly.
   connection is not hot-swapped and the old directory is not deleted.
 - Add database settings entry with SQLite active by default and MySQL advanced configuration
   reserved but disabled.
-- Add AI provider configuration entry without making real AI requests. API keys and MySQL passwords
-  are local settings in the first version; read APIs return only configured state. Future work should
-  migrate secrets to Electron `safeStorage` or an OS credential store.
+- Add AI provider configuration entry. API keys and MySQL passwords are local settings in the first
+  version; read APIs return only configured state. Future work should migrate secrets to Electron
+  `safeStorage` or an OS credential store.
 - Add OCR and review recommendation placeholders only. No OCR engine, model download, Tesseract
   install, or complex review algorithm is part of this phase.
 
 ## Phase 5: Extensions
 
-- Add AI providers behind interfaces.
+- Add AI providers behind interfaces. Done for the first text-only AI explanation slice:
+  OpenAI-compatible providers (`openai`, `deepseek`, `qwen`, `kimi`, `doubao`) use a lightweight
+  main-process fetch adapter; `claude` and `gemini` return unsupported. The first version is
+  non-streaming, sends only current mistake text context and safe attachment metadata, never sends
+  attachment files/local paths/the whole mistake library, and keeps API keys out of renderer,
+  preload, logs, docs, and error details.
 - Add OCR/document parsing behind interfaces.
 - Add review recommendation logic. Done for the first local today-review slice: the top navigation
   opens a Today Review page, settings can enable/disable recommendations and choose 3/5/10 items,
@@ -95,3 +100,6 @@ The review slice remains intentionally limited. It does not implement AI request
 parsing, export behavior, packaging, schema changes, migrations, or a complex memory model. Mistake
 creation only best-effort initializes review state; failure in that optional write must not block
 core mistake CRUD.
+
+Future AI work may add streaming output, multi-turn conversations, OCR, multimodal attachment input,
+saved AI answers, and safer secret storage. Those are not part of the first AI explanation slice.

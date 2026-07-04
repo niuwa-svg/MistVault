@@ -364,6 +364,13 @@ button:disabled {
 
 .state-error { color: var(--danger); }
 .state-success { color: var(--success); }
+.state-warning {
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--muted);
+  padding: 10px;
+}
 
 .search-box {
   align-items: center;
@@ -497,6 +504,7 @@ button:disabled {
 .form-section,
 .tool-card,
 .ai-placeholder,
+.ai-panel,
 .attachment-group {
   background: var(--surface-soft);
   border: 1px solid var(--border);
@@ -528,9 +536,47 @@ button:disabled {
 }
 
 .note-block summary,
-.ai-placeholder summary {
+.ai-placeholder summary,
+.ai-panel summary {
   cursor: pointer;
   font-weight: 700;
+}
+
+.ai-panel-body {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.ai-question-field {
+  display: grid;
+  gap: 6px;
+}
+
+.ai-question-field span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.ai-question-field textarea {
+  min-height: 72px;
+  resize: vertical;
+}
+
+.ai-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.ai-answer {
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  line-height: 1.75;
+  overflow-wrap: anywhere;
+  padding: 12px;
+  white-space: pre-wrap;
 }
 
 .inline-attachments {

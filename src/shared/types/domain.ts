@@ -263,6 +263,28 @@ export type AiSettings = {
   apiKeyConfigured: boolean;
 };
 
+export type AiMissingField = "provider" | "baseUrl" | "model" | "apiKey";
+
+export type AiExtensionStatus = {
+  name: "ai";
+  enabled: boolean;
+  provider: AiProvider | null;
+  configured: boolean;
+  ready: boolean;
+  missingFields: AiMissingField[];
+  unsupportedProvider: boolean;
+  status: "noop" | "disabled" | "notConfigured" | "unsupported" | "ready";
+  message: string;
+};
+
+export type AiExplanationResult = {
+  mistakeId: EntityId;
+  content: string;
+  provider: AiProvider;
+  model: string;
+  generatedAt: string;
+};
+
 export type UpdateAiSettingsPatch = {
   enabled?: boolean;
   provider?: AiProvider | null;
@@ -349,6 +371,6 @@ export type DataDirectoryMigrationResult = {
 export type ExtensionStatus = {
   name: "ai" | "ocr" | "review";
   enabled: boolean;
-  status: "noop" | "ready";
+  status: "noop" | "disabled" | "notConfigured" | "unsupported" | "ready";
   message: string;
 };

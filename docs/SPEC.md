@@ -2,13 +2,14 @@
 
 MistVault is a local Windows mistake notebook for exam preparation.
 
-MistVault now includes the local core notebook flow plus a first optional Today Review slice. It
-still does not implement MySQL runtime switching, real AI requests, OCR, packaging, or complex
-review algorithms.
+MistVault now includes the local core notebook flow, a first optional Today Review slice, and a
+first optional AI explanation extension. It still does not implement MySQL runtime switching, OCR,
+packaging, or complex review algorithms.
 
 The current core CRUD slice adds local subject/chapter management, node-scoped mistake CRUD, keyword
 relations, attachment basics, scoped keyword search, export, settings, and a local optional Today
-Review slice while keeping AI requests, OCR, packaging, and complex review algorithms out of scope.
+Review slice and a first text-only AI explanation slice while keeping OCR, packaging, and complex
+review algorithms out of scope.
 
 ## Core Direction
 
@@ -34,7 +35,7 @@ Review slice while keeping AI requests, OCR, packaging, and complex review algor
 - Export.
 - Data directory migration.
 - MySQL.
-- Real AI provider calls.
+- AI provider SDKs, streaming output, OCR, multimodal input, and persisted AI conversations.
 - OCR.
 - Review recommendation algorithm.
 
@@ -106,10 +107,29 @@ Review slice while keeping AI requests, OCR, packaging, and complex review algor
 - Data-directory migration copies the current data payload, validates the copy, writes a stable
   next-launch pointer, and prompts for restart. It does not hot-swap the active database connection
   and does not delete the old data directory.
-- MySQL, AI, and OCR settings are configuration entries or placeholders only. MySQL is not enabled,
-  AI requests are not sent, and OCR is not implemented. Review recommendation is a local optional
-  extension that uses existing mistake data and `review_states`; complex review algorithms are not
-  implemented in this module.
+- MySQL and OCR settings remain configuration entries or placeholders only. MySQL is not enabled and
+  OCR is not implemented. AI settings configure the optional text-only AI explanation extension.
+  Review recommendation is a local optional extension that uses existing mistake data and
+  `review_states`; complex review algorithms are not implemented in this module.
+
+## AI Explanation
+
+- AI explanation is an optional online extension. Local core features remain usable offline.
+- AI failures, network errors, authentication errors, rate limits, and timeouts are isolated to the
+  AI panel and must not affect mistake CRUD, attachments, search, export, settings, or Today Review.
+- The first version sends only the current mistake text context to the selected provider: question,
+  keywords, answer/analysis, note, node path, and safe attachment metadata.
+- Attachment metadata is limited to display filename, MIME type or extension, field, and size.
+- The first version never sends attachment files, file contents, base64, image data URLs, local
+  absolute paths, attachment `relativePath`, data-directory paths, or the whole mistake library.
+- AI requests are sent only from Electron main. Renderer calls the whitelisted
+  `window.mistVault.extensions.ai` API and never reads API keys or calls providers directly.
+- API key read APIs expose only configured/not-configured state; the secret value is not returned to
+  renderer, preload, docs, logs, or error details.
+- The first version supports OpenAI-compatible providers: OpenAI, DeepSeek, Qwen, Kimi, and Doubao.
+  Claude and Gemini return unsupported in this version.
+- Future AI work may add streaming output, multi-turn conversation, OCR, multimodal attachments,
+  saved AI answers, and safer secret storage such as Electron `safeStorage`.
 
 ## Today Review
 

@@ -1,8 +1,13 @@
-import type { ExtensionStatus } from "@shared/types";
+import type { AiExtensionStatus } from "@shared/types";
 
-export const getNoopAiStatus = (): ExtensionStatus => ({
+export const getNoopAiStatus = (): AiExtensionStatus => ({
   name: "ai",
   enabled: false,
   status: "noop",
-  message: "AI explanation is a placeholder in phase 1."
+  provider: null,
+  configured: false,
+  ready: false,
+  missingFields: ["provider", "baseUrl", "model", "apiKey"],
+  unsupportedProvider: false,
+  message: "AI explanation is unavailable until the database is ready."
 });

@@ -1,5 +1,6 @@
-﻿import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useRef, useState } from "react";
 import type {
+  AiExtensionStatus,
   Attachment,
   AttachmentField,
   AttachmentPreviewResult,
@@ -113,6 +114,8 @@ const formatDate = (value: string): string => {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 };
 
+const questionAttachmentPlaceholder = "[题目见附件]";
+
 const summarize = (text: string): string => {
   const normalized = text.replace(/\s+/g, " ").trim();
   return normalized.length > 90 ? `${normalized.slice(0, 90)}...` : normalized;
@@ -221,6 +224,14 @@ export const MistakeDetailPanel = ({
   const [linkError, setLinkError] = useState<string | null>(null);
   const [linkedPaths, setLinkedPaths] = useState<LinkedPathState>({});
   const [localError, setLocalError] = useState<string | null>(null);
+  const [aiStatus, setAiStatus] = useState<AiExtensionStatus | null>(null);
+  const [aiQuestion, setAiQuestion] = useState("");
+  const [aiAnswer, setAiAnswer] = useState<string | null>(null);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [aiCopyMessage, setAiCopyMessage] = useState<string | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const aiRequestSeq = useRef(0);
+  const currentMistakeIdRef = useRef<string | null>(null);
 
   const editing = mode === "create" || mode === "edit";
   const groupedAttachments = useMemo(() => {
@@ -256,6 +267,41 @@ export const MistakeDetailPanel = ({
       setLocalError(null);
     }
   }, [mode, mistake]);
+
+  useEffect(() => {
+    currentMistakeIdRef.current = mistake?.id ?? null;
+    aiRequestSeq.current += 1;
+    setAiAnswer(null);
+    setAiError(null);
+    setAiCopyMessage(null);
+    setAiQuestion("");
+    setAiLoading(false);
+
+    let active = true;
+    const loadAiStatus = async () => {
+      const result = await mistVaultApi.extensions.ai.getStatus();
+      if (!active || currentMistakeIdRef.current !== (mistake?.id ?? null)) {
+        return;
+      }
+
+      if (result.ok) {
+        setAiStatus(result.data);
+      } else {
+        setAiStatus(null);
+        setAiError(result.error.message);
+      }
+    };
+
+    if (mistake && mode === "view") {
+      void loadAiStatus();
+    } else {
+      setAiStatus(null);
+    }
+
+    return () => {
+      active = false;
+    };
+  }, [mistake?.id, mode]);
 
   useEffect(() => {
     setMoveTargetId(nodeOptions.find((node) => node.id !== mistake?.nodeId)?.id ?? "");
@@ -583,6 +629,131 @@ export const MistakeDetailPanel = ({
     }
   };
 
+  const getAiReadinessMessage = () => {
+    if (!aiStatus) {
+      return null;
+    }
+
+    if (!aiStatus.enabled) {
+      return t("aiDisabledHint");
+    }
+    if (aiStatus.unsupportedProvider) {
+      return t("aiUnsupportedProvider");
+    }
+    if (aiStatus.missingFields.includes("apiKey")) {
+      return t("aiMissingApiKey");
+    }
+    if (aiStatus.missingFields.includes("model")) {
+      return t("aiMissingModel");
+    }
+    if (aiStatus.missingFields.includes("baseUrl")) {
+      return t("aiMissingBaseUrl");
+    }
+    if (aiStatus.missingFields.includes("provider")) {
+      return t("aiMissingProvider");
+    }
+
+    return null;
+  };
+
+  const generateAiExplanation = async () => {
+    if (!mistake) {
+      return;
+    }
+
+    const requestMistakeId = mistake.id;
+    const requestSeq = aiRequestSeq.current + 1;
+    aiRequestSeq.current = requestSeq;
+    setAiLoading(true);
+    setAiError(null);
+    setAiCopyMessage(null);
+
+    try {
+      const result = await mistVaultApi.extensions.ai.explainMistake(
+        requestMistakeId,
+        aiQuestion.trim() || undefined
+      );
+
+      if (aiRequestSeq.current !== requestSeq || currentMistakeIdRef.current !== requestMistakeId) {
+        return;
+      }
+
+      if (result.ok) {
+        setAiAnswer(result.data.content);
+      } else {
+        setAiError(result.error.message);
+      }
+    } catch {
+      if (aiRequestSeq.current === requestSeq && currentMistakeIdRef.current === requestMistakeId) {
+        setAiError(t("aiUnknownError"));
+      }
+    } finally {
+      if (aiRequestSeq.current === requestSeq && currentMistakeIdRef.current === requestMistakeId) {
+        setAiLoading(false);
+      }
+    }
+  };
+
+  const copyAiAnswer = async () => {
+    if (!aiAnswer) {
+      return;
+    }
+
+    setAiCopyMessage(null);
+    try {
+      await navigator.clipboard.writeText(aiAnswer);
+      setAiCopyMessage(t("aiCopied"));
+    } catch {
+      setAiCopyMessage(t("aiCopyFailed"));
+    }
+  };
+
+  const renderAiPanel = () => {
+    if (!mistake) {
+      return null;
+    }
+
+    const readinessMessage = getAiReadinessMessage();
+    const attachmentOnlyWithoutText =
+      mistake.question === questionAttachmentPlaceholder &&
+      !mistake.answerAnalysis?.trim() &&
+      !mistake.note?.trim();
+    const canGenerate = Boolean(aiStatus?.ready) && !aiLoading && !attachmentOnlyWithoutText;
+
+    return (
+      <details className="ai-panel">
+        <summary>{t("aiPanelTitle")}</summary>
+        <div className="ai-panel-body">
+          {attachmentOnlyWithoutText ? (
+            <p className="state-text state-warning">{t("aiAttachmentOnlyHint")}</p>
+          ) : null}
+          {readinessMessage ? <p className="state-text state-warning">{readinessMessage}</p> : null}
+          {aiError ? <p className="state-text state-error">{aiError}</p> : null}
+          <label className="ai-question-field">
+            <span>{t("aiQuestionPlaceholder")}</span>
+            <textarea
+              value={aiQuestion}
+              onChange={(event) => setAiQuestion(event.target.value)}
+              placeholder={t("aiQuestionPlaceholder")}
+              disabled={aiLoading}
+            />
+          </label>
+          <div className="ai-actions">
+            <button type="button" onClick={() => void generateAiExplanation()} disabled={!canGenerate}>
+              {aiLoading ? t("aiGenerating") : aiAnswer ? t("aiRegenerate") : t("aiGenerate")}
+            </button>
+            <button type="button" onClick={() => void copyAiAnswer()} disabled={!aiAnswer || aiLoading}>
+              {t("aiCopyAnswer")}
+            </button>
+          </div>
+          {aiCopyMessage ? <p className="state-text compact-state">{aiCopyMessage}</p> : null}
+          {aiAnswer ? <div className="ai-answer">{aiAnswer}</div> : null}
+          {!aiAnswer && !aiLoading ? <p className="state-text compact-state">{t("aiPanelReadyHint")}</p> : null}
+        </div>
+      </details>
+    );
+  };
+
   const renderAttachmentGroup = (field: AttachmentField, titleKey: TranslationKey, allowAdd = false) => {
     const fieldAttachments = groupedAttachments.get(field) ?? [];
     if (fieldAttachments.length === 0 && !allowAdd) {
@@ -797,10 +968,7 @@ export const MistakeDetailPanel = ({
 
           {renderAttachmentGroup("general", "legacyAttachments", false)}
 
-          <details className="ai-placeholder">
-            <summary>{t("aiPanelTitle")}</summary>
-            <p>{t("aiPanelPlaceholder")}</p>
-          </details>
+          {renderAiPanel()}
 
           <section className="secondary-tools">
             <div className="tool-card">

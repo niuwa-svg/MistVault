@@ -1,5 +1,7 @@
 import type { ApiResult } from "./api";
 import type {
+  AiExtensionStatus,
+  AiExplanationResult,
   Attachment,
   AttachmentFailure,
   AttachmentField,
@@ -97,7 +99,11 @@ export type MistVaultApi = {
   };
   extensions: {
     ai: {
-      getStatus: () => Promise<ApiResult<ExtensionStatus>>;
+      getStatus: () => Promise<ApiResult<AiExtensionStatus>>;
+      explainMistake: (
+        mistakeId: string,
+        userQuestion?: string
+      ) => Promise<ApiResult<AiExplanationResult>>;
     };
     ocr: {
       getStatus: () => Promise<ApiResult<ExtensionStatus>>;
@@ -150,6 +156,7 @@ export const ipcChannels = {
   exportMistakes: "export:exportMistakes",
   exportOpenDirectory: "export:openDirectory",
   extensionAiGetStatus: "extensions:ai:getStatus",
+  extensionAiExplainMistake: "extensions:ai:explainMistake",
   extensionOcrGetStatus: "extensions:ocr:getStatus",
   extensionReviewGetStatus: "extensions:review:getStatus",
   extensionReviewGetToday: "extensions:review:getToday",

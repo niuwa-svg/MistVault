@@ -24,6 +24,8 @@ type StoredAiSettings = {
   apiKey: string | null;
 };
 
+export type PrivateAiSettings = StoredAiSettings;
+
 type StoredMysqlSettings = {
   host: string;
   port: number;
@@ -152,6 +154,14 @@ export class SettingsService {
   getAiSettings(): ApiResult<AiSettings> {
     return captureServiceError(
       () => this.getAiSettingsValue(),
+      "AI_SETTINGS_GET_FAILED",
+      "Failed to read AI settings."
+    );
+  }
+
+  getPrivateAiSettings(): ApiResult<PrivateAiSettings> {
+    return captureServiceError(
+      () => this.getStoredAiSettings(),
       "AI_SETTINGS_GET_FAILED",
       "Failed to read AI settings."
     );

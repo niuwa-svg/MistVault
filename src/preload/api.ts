@@ -66,7 +66,9 @@ export const mistVaultApi: MistVaultApi = {
   },
   extensions: {
     ai: {
-      getStatus: () => ipcRenderer.invoke(ipcChannels.extensionAiGetStatus)
+      getStatus: () => ipcRenderer.invoke(ipcChannels.extensionAiGetStatus),
+      explainMistake: (mistakeId, userQuestion) =>
+        ipcRenderer.invoke(ipcChannels.extensionAiExplainMistake, mistakeId, userQuestion)
     },
     ocr: {
       getStatus: () => ipcRenderer.invoke(ipcChannels.extensionOcrGetStatus)
