@@ -10,11 +10,20 @@
     "build": "tsc --noEmit && electron-vite build",
     "dist": "npm run build && electron-builder",
     "typecheck": "tsc --noEmit",
-    "verify:db": "npm run rebuild:native && node scripts/verify-db.mjs"
+    "verify:db": "npm run rebuild:native && node scripts/verify-db.mjs",
+    "verify:ocr-runtime": "node scripts/verify-ocr-runtime.mjs",
+    "verify:extraction-stage1a": "node scripts/verify-extraction-stage1a.mjs",
+    "verify:extraction-stage1b": "node scripts/verify-extraction-stage1b.mjs",
+    "verify:extraction-text": "node scripts/verify-extraction-stage1a.mjs text",
+    "verify:extraction-cache": "node scripts/verify-extraction-stage1a.mjs cache",
+    "verify:extraction-errors": "node scripts/verify-extraction-stage1a.mjs errors",
+    "verify:extraction-ocr": "node scripts/verify-extraction-stage1a.mjs ocr"
   },
   "dependencies": {
     "better-sqlite3": "^12.11.1",
     "docx": "^9.7.1",
+    "jszip": "3.10.1",
+    "pdfjs-dist": "4.10.38",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },

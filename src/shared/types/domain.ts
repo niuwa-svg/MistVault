@@ -169,6 +169,47 @@ export type AttachmentPreviewResult =
       size?: number;
     };
 
+export type AttachmentTextSourceType = "text" | "ocr" | "unsupported";
+
+export type AttachmentTextExtractionStatus =
+  | "notExtracted"
+  | "extracting"
+  | "success"
+  | "failed";
+
+export type AttachmentTextCache = {
+  attachmentId: EntityId;
+  originalName: string;
+  field: AttachmentField;
+  sourceType: AttachmentTextSourceType;
+  extractedText: string;
+  extractionStatus: AttachmentTextExtractionStatus;
+  errorCode: string | null;
+  errorMessage: string | null;
+  sourceSize: number | null;
+  sourceHash: string | null;
+  extractedAt: string | null;
+  isEdited: boolean;
+  editedAt: string | null;
+  updatedAt: string | null;
+};
+
+export type AttachmentTextStatusResult = {
+  attachmentId: EntityId;
+  status: AttachmentTextExtractionStatus;
+  sourceType: AttachmentTextSourceType | null;
+  hasText: boolean;
+  isEdited: boolean;
+  extractedAt: string | null;
+  editedAt: string | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+};
+
+export type AttachmentTextResult = AttachmentTextCache & {
+  truncated: boolean;
+};
+
 export type CreateNodeInput = {
   parentId?: EntityId | null;
   name: string;
@@ -283,6 +324,12 @@ export type AiExplanationResult = {
   provider: AiProvider;
   model: string;
   generatedAt: string;
+};
+
+export type AttachmentTextScope = "none" | "question" | "answerAnalysis" | "note" | "all";
+
+export type AiExplainMistakeOptions = {
+  attachmentTextScope?: AttachmentTextScope;
 };
 
 export type UpdateAiSettingsPatch = {

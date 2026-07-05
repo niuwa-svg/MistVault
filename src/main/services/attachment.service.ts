@@ -139,7 +139,7 @@ export class AttachmentService {
 
   listForMistake(mistakeId: string): ApiResult<Attachment[]> {
     return captureServiceError(
-      () => this.attachmentsRepository.listForMistake(mistakeId),
+      () => this.attachmentsRepository.listForMistake(mistakeId).map(this.toPublicAttachment),
       "ATTACHMENT_LIST_FAILED",
       "Failed to list attachments."
     );
@@ -158,11 +158,17 @@ export class AttachmentService {
       return serviceFail("ATTACHMENT_FIELD_INVALID", "Attachment field is invalid.");
     }
 
-    return captureServiceError(
-      () => this.consumeTokensForMistake(mistakeId, tokens.map((token) => ({ token, field }))),
-      "ATTACHMENT_ADD_FAILED",
-      "Failed to add attachments."
-    );
+    return captureServiceError(() => {
+      const result = this.consumeTokensForMistake(
+        mistakeId,
+        tokens.map((token) => ({ token, field }))
+      );
+
+      return {
+        attachments: result.attachments.map(this.toPublicAttachment),
+        attachmentErrors: result.attachmentErrors
+      };
+    }, "ATTACHMENT_ADD_FAILED", "Failed to add attachments.");
   }
 
   consumeTokensForMistake(
@@ -447,5 +453,13 @@ export class AttachmentService {
     }
 
     return mimeByExt.get(ext.toLowerCase()) ?? "application/octet-stream";
+  }
+
+  toPublicAttachment(attachment: Attachment): Attachment {
+    return {
+      ...attachment,
+      storedName: "",
+      relativePath: ""
+    };
   }
 }

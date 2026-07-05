@@ -1,215 +1,174 @@
 # Module Boundaries
 
+本文档定义 MistVault 初版模块边界。核心原则是：renderer 保持 UI 层，main 负责本地能力，preload 只暴露白名单 API；AI、OCR、文档提取和复习推荐都必须失败隔离，不能影响核心错题功能。
+
 ## Core Modules
 
-- Data directory skeleton: creates the local storage shape.
-- Database core: owns SQLite connection, migrations, repositories, and services.
-- IPC shell: exposes version, settings summary, data directory info, database status, and extension status.
-- Renderer shell: displays the main three-column workspace.
-- Subject/chapter tree: displays and manages the left-side local node tree.
-- Shared types: keeps contracts explicit between layers.
+- `src/main`：拥有窗口、IPC、SQLite、文件、附件、OCR runtime、文档提取、AI 请求、导出和数据目录。
+- `src/preload`：只暴露 `window.mistVault`，不暴露任意 Node / Electron 能力。
+- `src/renderer`：只做 React UI 和用户交互，不导入 `fs`、`path`、`electron`、SQLite driver 或 main 模块。
+- `src/shared`：保存纯类型、IPC channel 和跨层契约。
 
-## Export Boundary
-
-The export module owns local share/export output only:
-
-- export selected mistake IDs to `txt`, `md`, `docx`, or `pdf`.
-- create a non-overwriting folder export under a user-selected directory or the data-directory
-  `exports/` folder.
-- render exported documents as Chinese study materials with natural question numbers, not database
-  IDs.
-- copy active attachment files into user-readable folders such as `assets/item-001/question/` using
-  database attachment metadata.
-- embed safe, size-limited image attachments into PDF output while keeping non-image files in the
-  export assets folder.
-- list missing attachments in the main document while continuing the export.
-- open only directories that were created by export, selected through the export dialog, or located
-  under the data-directory `exports/` folder.
-
-The first export version supports folder output only. `zip` packaging, templates, more output
-formats, and database-wide full-result export are follow-up work.
-
-## Extension Modules
-
-- `extensions/ai`: optional text-only AI explanation provider adapters, isolated behind main-process
-  services.
-- `extensions/ocr`: noop provider only.
-- `extensions/review`: local today-review recommendation API backed by `review_states`.
-
-Extension modules must remain optional. Their disabled/noop state must not prevent the main UI from loading.
+所有 IPC 返回值使用统一的 `ApiResult<T>` 结构。
 
 ## Forbidden Coupling
 
-- renderer must not import `fs`, `path`, `electron`, database drivers, or main modules.
-- renderer must not read or write SQLite directly.
-- future core modules must access persisted data through `src/main/services` or repositories owned by services.
-- extension modules must not be required for core UI startup.
-- API keys and user data paths must not be hard-coded.
-
-## Subject/Chapter Tree Boundary
-
-The subject/chapter tree owns only node navigation and organization:
-
-- root subject creation.
-- child chapter creation under any node.
-- node rename, soft delete, and move.
-- selected node state in the renderer.
-- selected node path lookup for later mistake-list scoping.
-
-The renderer calls only `window.mistVault.nodes` through preload. Node persistence, deletion
-checks, and move-cycle checks belong in the Electron main process service layer. The tree uses the
-`nodes` table and does not own mistake CRUD, attachment upload, keyword search, export, AI, OCR, or
-review recommendation behavior.
-
-Node deletion must stay conservative: a node with child nodes cannot be deleted directly, and a node
-with existing mistakes must also be blocked. Moving a node to the virtual root is represented as
-`parentId = null`; moving a node under itself or under one of its descendants is forbidden.
+- renderer 不访问本地文件系统。
+- renderer 不打开 SQLite，不读取数据库文件。
+- renderer 不读取 API Key、MySQL 密码或用户本地绝对路径。
+- main 不把附件源路径、存储路径、`relativePath`、数据目录路径、OCR 命令行返回给 renderer。
+- extension 模块失败不能阻止主界面、错题 CRUD、附件打开、搜索、导出、设置或复习推荐加载。
+- 任何模块都不能硬编码真实 API Key 或开发机绝对路径。`E:\develop` 只能作为文档里的开发缓存建议路径出现。
 
 ## Storage Boundary
 
-The main process manages the user data directory. Attachments are stored under `attachments/`; the
-database stores attachment metadata and relative paths only. MySQL remains an advanced reserved
-adapter option and is not part of the default runtime path.
+main 进程管理用户数据目录。默认数据位于本地用户数据目录，不在安装目录中。
 
-## Settings Boundary
+- SQLite 数据库：`mistakes.db`。
+- 附件文件：`attachments/`。
+- 导出文件：`exports/` 或用户选择目录。
+- 备份文件：`backups/`。
+- 数据目录迁移只复制已知数据项，写入下次启动指针，不热切换当前 SQLite 连接，不删除旧目录。
 
-The settings module owns local preferences only:
+MySQL 是高级预留配置。默认运行时仍是 SQLite，不应在文档或 UI 中暗示 MySQL 已正式启用。
 
-- theme mode: `light`, `dark`, or `system`.
-- default export format, default export directory, and default attachment inclusion.
-- backup preference and backup directory preference.
-- data-directory migration orchestration.
-- database type preference with SQLite as the active default and MySQL as an advanced disabled entry.
-- AI provider configuration for the optional text-only explanation extension.
-- OCR and review recommendation placeholder preferences.
+## Subject / Chapter Boundary
 
-Settings are read and saved through Electron main services and the whitelisted
-`window.mistVault.settings` preload API. Renderer code must not read local config files, access the
-filesystem, open SQLite, or call extension providers directly.
+科目 / 章节树只负责节点组织：
 
-Data-directory migration uses a first-version safe flow: copy the known data-directory entries,
-validate the copy, write the next-launch pointer, then ask the user to restart. It does not hot-swap
-the active SQLite connection and never deletes the old data directory. The stable next-launch pointer
-is written under Electron `app.getPath("userData")`, outside the migrated data-directory payload.
+- 根科目和子章节创建。
+- 节点重命名、移动、受保护软删除。
+- 当前选中节点和节点路径显示。
 
-AI API keys and MySQL passwords are accepted only as settings input. Read APIs return only
-configured/not-configured state and never return secret values. The AI explanation service may read
-private AI settings only inside Electron main; that private read path is not exposed through IPC or
-preload. The first version stores these values in local settings as a temporary implementation;
-later versions should move them to Electron `safeStorage` or an OS credential store.
-
-## AI Explanation Boundary
-
-The AI explanation module owns only on-demand text explanations for the currently selected mistake:
-
-- read AI settings and API key in Electron main only.
-- read the requested mistake, node path, and attachment metadata through main services.
-- call OpenAI-compatible providers through a small fetch-based adapter.
-- return a single non-streaming Chinese answer to the renderer AI panel.
-- return Claude and Gemini as unsupported in the first version.
-
-The AI request payload must include only current mistake context: question, keywords,
-answer/analysis, note, node path, and safe attachment metadata. Attachment metadata is limited to
-original display name, MIME type or extension, field, and size.
-
-The AI module must not send attachment files, attachment contents, image data URLs, base64,
-attachment IDs unless needed, stored filenames, `relativePath`, absolute local paths, data-directory
-paths, the whole mistake library, or unrelated mistakes. It must not persist AI answers, write to
-notes, run OCR, parse documents, use multimodal input, stream responses, install SDKs, add
-dependencies, change database schema, or create migrations.
-
-AI failures are isolated to the AI panel. They must not prevent subject/chapter tree loading,
-mistake CRUD, attachments, keyword search, export, settings, Today Review, or OCR placeholders from
-working.
+节点模块不负责错题 CRUD、附件、搜索、导出、AI、OCR、文档提取或复习推荐。节点删除必须保守：有子节点或非删除错题的节点不能直接删除。
 
 ## Mistake CRUD Boundary
 
-The mistake CRUD module owns the basic local mistake lifecycle:
+错题模块负责本地错题生命周期：
 
-- list mistakes for the currently selected real subject/chapter node plus all non-deleted
-  descendants; the virtual root lists all non-deleted mistakes under non-deleted nodes.
-- create, view, edit, soft delete, and move mistakes.
-- validate that each mistake has at least one text keyword tag. Keywords are not content fields and
-  cannot receive attachments.
-- validate that each mistake has question content through either question text or at least one
-  successfully saved `question` attachment.
-- maintain simple undirected mistake-to-mistake links by ID without implementing search.
+- 按当前节点和非删除子孙节点列出错题。
+- 新增、查看、编辑、软删除、移动错题。
+- 管理关键词 tag。
+- 管理简单的错题关联。
+- 创建错题时可 best-effort 初始化 `review_states`。
 
-The module uses the existing `mistakes`, `keywords`, `mistake_keywords`, and `mistake_links` tables.
-The `mistake_links` table keeps its existing source/target column names, but service and repository
-code treat each relationship as an undirected pair: linking A to B makes B visible from A and A
-visible from B, duplicate reverse links are ignored, and unlinking removes either stored direction.
-If a mistake is created with a question attachment but no question text, the database `question`
-column stores `[题目见附件]` to remain compatible with the existing non-null schema.
-
-The mistake CRUD module does not own keyword search, export, OCR, AI explanation, review
-recommendation, or data-directory migration behavior. On create it may best-effort initialize a
-`review_states` row for the new mistake, but review-state initialization failure must never roll
-back or block the core mistake save flow. Missing review states are repaired later by the review
-recommendation module.
-
-## Review Recommendation Boundary
-
-The review recommendation module is an optional extension that owns only local today-review
-suggestions:
-
-- ensure missing `review_states` rows for existing non-deleted mistakes under non-deleted nodes.
-- read `reviewRecommendationEnabled` and `reviewDailyCount` settings.
-- list due mistakes where `review_states.enabled = 1` and `next_review_at <= now`.
-- mark a mistake reviewed by incrementing `review_count`, setting `last_reviewed_at`, and computing
-  the next ISO timestamp from the simple interval table.
-
-The first interval table is intentionally simple: after review counts 1/2/3/4/5/6 the next review
-is 1/2/4/7/15/30 days later; count 7 and later stay at 30 days.
-
-Recommendation failures are isolated to the Today Review page. They must not prevent subject/chapter
-tree loading, mistake CRUD, attachments, keyword search, export, settings, AI placeholders, or OCR
-placeholders from working.
-
-The review module does not call AI providers, run OCR, parse attachments, export content, change the
-mistake schema, or own the subject/chapter tree.
-
-## Keyword Search Boundary
-
-The keyword search module owns scoped local mistake lookup by keyword relation:
-
-- search all non-deleted mistakes when the renderer passes the virtual root scope.
-- search the selected real node plus all non-deleted descendants when a subject/chapter node is
-  provided.
-- match through the existing `keywords` and `mistake_keywords` tables.
-- return compact result rows with question summary source text, matched mistake keywords, node path,
-  and updated time.
-- open a selected result through the existing mistake detail and attachment APIs.
-
-Search is exposed through the existing `window.mistVault.mistakes` preload namespace. The renderer
-does not access SQLite or filesystem capabilities directly.
-
-This module does not own export, data-directory migration, AI explanation, OCR, attachment text
-parsing, or review recommendation behavior. Future search expansions may add question full-text,
-answer-analysis search, and attachment OCR text search as separate follow-up work, but they are not
-part of the current keyword search slice.
+错题模块不负责 OCR、文档提取、AI 请求、导出文件写入、数据目录迁移或复杂复习算法。可选模块失败不能回滚或阻塞核心错题保存。
 
 ## Attachment Boundary
 
-The attachment module owns local file selection, safe copying into the user data directory, metadata
-persistence, soft removal, image preview, and opening files with the system default app.
+附件模块负责本地附件选择、复制、元数据、预览、打开和软删除。
 
-- Renderer receives only staged attachment tokens and display metadata, never source absolute paths.
-- Main keeps token-to-path mappings in memory, expires them, and consumes them once.
-- Stored filenames are generated with UUIDs and safe extensions; original filenames are display
-  metadata only.
-- New attachment `field` values are limited to `question`, `answerAnalysis`, and `note`.
-- Existing `general` attachment rows remain readable and removable as legacy data, but the UI and
-  service write paths do not offer `general` as a new target.
-- Removing an attachment soft-deletes metadata only. It does not delete the original file or the
-  copied file under `attachments/`.
+- renderer 只接收 staged token 和展示元数据，不接收源文件绝对路径。
+- main 在内存中保存 token 到源路径的短期映射，复制后消费 token。
+- 附件复制到用户数据目录下的 `attachments/`。
+- 数据库只保存附件元数据和相对路径。
+- 新附件字段限制为 `question`、`answerAnalysis`、`note`；旧 `general` 数据可读。
+- 移除附件只软删除元数据，不删除用户原文件，也不物理删除已复制文件。
 
-The attachment module does not parse PDF/Word/txt contents, run OCR, or introduce heavyweight
-preview dependencies.
+附件模块本身不解析文本、不运行 OCR、不调用 AI。
 
-## Export Non-Goals
+## Attachment Text Extraction Boundary
 
-The export module does not modify original mistakes, move/delete/modify original attachments, change
-the database schema, migrate the data directory, run OCR, call AI providers, or implement review
-recommendation logic. Renderer export UI calls only `window.mistVault.export`; filesystem work stays
-in Electron main.
+附件文本提取由 main 进程服务负责，通过 `window.mistVault.extensions.extraction` 暴露：
+
+- `getStatus(attachmentId)`
+- `extractAttachmentText(attachmentId)`
+- `getExtractedText(attachmentId)`
+- `updateExtractedText(attachmentId, text)`
+- `clearExtractedText(attachmentId)`
+
+renderer 只能传 `attachmentId` 和用户编辑后的纯文本。main 解析数据库中的 `relativePath`，校验文件位于数据目录 `attachments/` 下，并且不向 renderer 返回：
+
+- 绝对路径。
+- `relativePath`。
+- 存储文件名。
+- 原始文件二进制。
+- 图片 base64。
+- OCR 命令行。
+
+当前提取能力：
+
+- `txt` / `md` 文本提取。
+- `jpg` / `jpeg` / `png` / `bmp` 使用内置 Tesseract OCR。
+- `docx` 基础正文提取。
+- PDF 文本层提取。
+
+当前不支持：
+
+- `.doc`。
+- 扫描版 PDF 自动 OCR。
+- Word 图片 OCR。
+- 复杂 Word 版式完整还原。
+- 数学公式精准识别。
+
+提取结果写入 `attachment_text_cache`。用户可以编辑缓存文本。提取失败只影响对应附件的提取状态，不影响核心错题功能。
+
+## AI Explanation Boundary
+
+AI 讲解模块只负责当前错题的按需文本讲解：
+
+- 在 Electron main 内读取 AI 设置和 API Key。
+- 通过 main 服务读取当前错题、节点路径、附件展示元数据和用户选择范围内的附件提取文本。
+- 调用 OpenAI-compatible provider。
+- 返回一次性中文回答，不实现流式输出或多轮对话。
+- Claude / Gemini 第一版返回未支持，不作为原生 adapter。
+
+默认 AI 请求只包含当前错题文本上下文。只有用户明确选择 `attachmentTextScope` 时，才读取并发送成功缓存的附件提取文本。
+
+AI 模块不得发送：
+
+- 附件原文件。
+- 图片 data URL 或 base64。
+- 本地绝对路径、数据目录路径、`relativePath`、存储文件名。
+- 整个错题库或无关错题。
+- API Key 给 renderer、日志或导出内容。
+
+AI 模块不得自动运行 OCR、自动解析附件、持久化 AI 回答、写回错题笔记、安装 SDK、修改 schema 或创建 migration。AI 失败只影响 AI 面板。
+
+## Export Boundary
+
+导出模块只负责本地导出：
+
+- 导出选中错题、当前列表或当前搜索结果。
+- 支持 `txt`、`md`、`docx`、`pdf`。
+- 在用户选择目录或数据目录 `exports/` 下创建不覆盖的导出目录。
+- 复制可用附件到导出目录的 assets 子目录。
+- 缺失附件写入导出说明，不让整次导出全部失败。
+
+导出模块不修改原始错题，不移动或删除原附件，不运行 OCR，不调用 AI，不迁移数据目录，不实现复习推荐。
+
+## Keyword Search Boundary
+
+关键词搜索模块只负责本地关键词关系查询：
+
+- 虚拟根节点搜索所有非删除错题。
+- 真实节点搜索该节点和非删除子孙节点下的错题。
+- 通过 `keywords` 和 `mistake_keywords` 查询。
+- 返回供 renderer 展示的简要结果和节点路径。
+
+当前搜索不包含全文搜索、附件 OCR 文本搜索或 AI 语义搜索。
+
+## Review Recommendation Boundary
+
+复习推荐模块是本地可选扩展，只负责今日复习建议：
+
+- 使用 `review_states`。
+- 读取复习推荐开关和每日数量设置。
+- 查询到期错题。
+- 标记完成复习并更新下一次复习时间。
+
+复习推荐不调用 AI、不运行 OCR、不解析附件、不导出内容、不修改错题 schema。
+
+## Settings Boundary
+
+设置模块负责本地偏好：
+
+- 主题。
+- 默认导出格式、目录和附件包含策略。
+- 备份偏好。
+- 数据目录迁移。
+- SQLite 默认数据库设置和 MySQL 高级预留配置。
+- AI provider 配置。
+- OCR / 提取 / 复习推荐相关偏好。
+
+AI API Key 和 MySQL 密码只能作为设置输入写入。读取 API 只返回是否已配置，不返回明文值。第一版本地保存 secret 是临时方案，后续可迁移到 Electron `safeStorage` 或系统凭据存储。

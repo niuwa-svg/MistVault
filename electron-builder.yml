@@ -5,7 +5,11 @@ directories:
 files:
   - out/**
   - package.json
+extraResources:
+  - from: resources/ocr/tesseract
+    to: ocr/tesseract
 win:
+  signAndEditExecutable: false
   target:
     - nsis
 nsis:

@@ -149,7 +149,9 @@ export class MistakeService {
 
         return {
           mistake: this.mistakesRepository.getById(mistakeId) ?? mistake,
-          attachments: attachmentResult.attachments,
+          attachments: attachmentResult.attachments.map((attachment) =>
+            this.attachmentService.toPublicAttachment(attachment)
+          ),
           attachmentErrors: attachmentResult.attachmentErrors
         };
       });
@@ -330,7 +332,9 @@ export class MistakeService {
 
         return {
           mistake: this.mistakesRepository.getById(id) ?? mistake,
-          attachments: attachmentResult.attachments,
+          attachments: attachmentResult.attachments.map((attachment) =>
+            this.attachmentService.toPublicAttachment(attachment)
+          ),
           attachmentErrors: attachmentResult.attachmentErrors
         };
       }), "MISTAKE_UPDATE_FAILED", "Failed to update mistake.");

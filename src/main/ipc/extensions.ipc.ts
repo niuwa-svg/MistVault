@@ -1,16 +1,46 @@
 import { ipcMain } from "electron";
 import { apiFail, apiOk, ipcChannels } from "@shared/types";
+import type { AiExplainMistakeOptions, AttachmentTextScope } from "@shared/types";
 import { getNoopAiStatus } from "../extensions/ai/noopAiProvider";
 import { getNoopOcrStatus } from "../extensions/ocr/noopOcrProvider";
 import { getNoopReviewStatus } from "../extensions/review/noopReviewScheduler";
-import type { AiService, ReviewService } from "../services";
+import type { AiService, AttachmentTextExtractionService, ReviewService } from "../services";
 
 const reviewUnavailable = () =>
   apiFail("REVIEW_NOT_AVAILABLE", "Review recommendations are unavailable until the database is ready.");
 
+const extractionUnavailable = () =>
+  apiFail(
+    "EXTRACTION_NOT_AVAILABLE",
+    "Attachment text extraction is unavailable until the database is ready."
+  );
+
+const attachmentTextScopes = new Set<AttachmentTextScope>([
+  "none",
+  "question",
+  "answerAnalysis",
+  "note",
+  "all"
+]);
+
+const normalizeAiOptions = (options: unknown): AiExplainMistakeOptions => {
+  if (!options || typeof options !== "object") {
+    return { attachmentTextScope: "none" };
+  }
+
+  const scope = (options as { attachmentTextScope?: unknown }).attachmentTextScope;
+  return {
+    attachmentTextScope:
+      typeof scope === "string" && attachmentTextScopes.has(scope as AttachmentTextScope)
+        ? (scope as AttachmentTextScope)
+        : "none"
+  };
+};
+
 export const registerExtensionsIpc = (
   aiService: AiService | null = null,
-  reviewService: ReviewService | null = null
+  reviewService: ReviewService | null = null,
+  attachmentTextExtractionService: AttachmentTextExtractionService | null = null
 ): void => {
   ipcMain.handle(ipcChannels.extensionAiGetStatus, async () => {
     try {
@@ -22,13 +52,13 @@ export const registerExtensionsIpc = (
 
   ipcMain.handle(
     ipcChannels.extensionAiExplainMistake,
-    async (_event, mistakeId: string, userQuestion?: string) => {
+    async (_event, mistakeId: string, userQuestion?: string, options?: unknown) => {
       if (!aiService) {
         return apiFail("AI_NOT_CONFIGURED", "AI is unavailable until the database is ready.");
       }
 
       try {
-        return await aiService.explainMistake(mistakeId, userQuestion);
+        return await aiService.explainMistake(mistakeId, userQuestion, normalizeAiOptions(options));
       } catch {
         return apiFail("AI_UNKNOWN_ERROR", "AI explanation failed.");
       }
@@ -42,6 +72,58 @@ export const registerExtensionsIpc = (
       return apiFail("OCR_STATUS_FAILED", "Failed to read OCR extension status.", error);
     }
   });
+
+  ipcMain.handle(ipcChannels.extensionExtractionGetStatus, async (_event, attachmentId: string) => {
+    if (!attachmentTextExtractionService) {
+      return extractionUnavailable();
+    }
+
+    return attachmentTextExtractionService.getStatus(attachmentId);
+  });
+
+  ipcMain.handle(
+    ipcChannels.extensionExtractionExtractAttachmentText,
+    async (_event, attachmentId: string) => {
+      if (!attachmentTextExtractionService) {
+        return extractionUnavailable();
+      }
+
+      return attachmentTextExtractionService.extractAttachmentText(attachmentId);
+    }
+  );
+
+  ipcMain.handle(
+    ipcChannels.extensionExtractionGetExtractedText,
+    async (_event, attachmentId: string) => {
+      if (!attachmentTextExtractionService) {
+        return extractionUnavailable();
+      }
+
+      return attachmentTextExtractionService.getExtractedText(attachmentId);
+    }
+  );
+
+  ipcMain.handle(
+    ipcChannels.extensionExtractionUpdateExtractedText,
+    async (_event, attachmentId: string, text: string) => {
+      if (!attachmentTextExtractionService) {
+        return extractionUnavailable();
+      }
+
+      return attachmentTextExtractionService.updateExtractedText(attachmentId, text);
+    }
+  );
+
+  ipcMain.handle(
+    ipcChannels.extensionExtractionClearExtractedText,
+    async (_event, attachmentId: string) => {
+      if (!attachmentTextExtractionService) {
+        return extractionUnavailable();
+      }
+
+      return attachmentTextExtractionService.clearExtractedText(attachmentId);
+    }
+  );
 
   ipcMain.handle(ipcChannels.extensionReviewGetStatus, async () => {
     try {

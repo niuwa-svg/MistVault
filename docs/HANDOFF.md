@@ -1,5 +1,7 @@
 # MistVault Project Handoff
 
+> 当前说明：这份 handoff 是早期交接文档，部分“尚未实现 / placeholder”描述已经过期。当前初版状态请以 `README.md`、`DEVELOPMENT_PLAN.md`、`MODULE_BOUNDARIES.md`、`DATA_MODEL.md`、`AI_USAGE.md`、`ATTACHMENT_TEXT_EXTRACTION_STAGE1A.md`、`ATTACHMENT_TEXT_EXTRACTION_STAGE1B.md` 为准。MistVault 当前已经具备核心错题 CRUD、搜索、导出、设置、复习推荐、AI 讲解、内置 OCR runtime、图片 OCR、文本提取、docx 基础正文提取和 PDF 文本层提取。
+
 ## 1. 当前技术栈
 
 - Electron + React + TypeScript + Vite / electron-vite
@@ -397,27 +399,32 @@ docs/HANDOFF.md
 
 当前交接总结，供新对话快速接手。
 
-注意：`README.md` 当前仍偏第一阶段骨架描述，已经落后于实际实现状态，后续应更新。
+注意：`README.md` 已在初版文档更新中改为当前状态入口。本文档仍保留部分历史交接内容，新接手时应优先阅读 README 和当前 docs。
 
-## 9. 当前仍然是 placeholder 的模块
+## 9. 当前状态与仍保留的预留模块
 
 - AI 讲解
-  - 当前只有 noop status。
-  - 没有真实 provider。
-  - 没有 API Key 管理完整实现。
-  - 没有真实网络请求。
+  - 已有 OpenAI-compatible provider 的初版网络请求。
+  - 已有 provider / API Key 设置入口。
+  - 默认只发送当前错题文本。
+  - 只有用户明确选择时才发送附件提取文本。
+  - 不发送附件原文件、图片 base64、本地路径或整个错题库。
+  - Claude / Gemini 当前未作为原生 adapter 支持。
 
 - OCR / 文档解析
-  - 当前只有 noop status。
-  - 没有 OCR。
-  - 没有 PDF/docx/txt 自动解析。
-  - 不会自动填充错题内容。
+  - OCR runtime 已内置。
+  - 图片 OCR 支持 `jpg` / `jpeg` / `png` / `bmp`。
+  - `txt` / `md` 支持文本提取。
+  - `docx` 支持基础正文提取。
+  - PDF 支持文本层提取。
+  - 扫描版 PDF 自动 OCR、Word 图片 OCR、数学公式精准识别仍未支持。
+  - 不会自动把提取结果写回错题题目、解析或笔记字段。
 
 - 艾宾浩斯复习推荐
-  - 当前有 `review_states` 基础表和 `ReviewService` 的状态读写能力。
-  - 当前 extension status 仍是 noop。
-  - 没有完整推荐算法。
-  - 没有完整首页推荐流。
+  - 已有本地 Today Review 初版。
+  - 使用 `review_states`。
+  - 支持设置开关、每日数量和复习完成标记。
+  - 当前仍是简单间隔表，不是复杂记忆模型。
 
 - MySQL
   - 类型和 adapter 边界存在。
@@ -425,32 +432,32 @@ docs/HANDOFF.md
   - 不应宣传为已完成。
 
 - 数据目录迁移
-  - 设置需求中预留。
-  - 当前未实现完整迁移流程。
+  - 已有初版安全迁移入口。
+  - 复制已知数据项，写入下次启动指针。
+  - 不热切换当前 SQLite 连接，不删除旧目录。
 
 - ZIP 导出
   - 类型中有 `zip`。
   - 当前导出服务明确返回 `EXPORT_PACKAGE_MODE_UNSUPPORTED`。
 
-## 10. 明确尚未实现的功能
+## 10. 明确尚未实现或不在初版范围内的功能
 
 - 账号系统：按需求本来就不需要。
 - 数据上传 / 云同步：按需求不实现。
-- 真实 AI 讲解请求。
-- AI provider 配置 UI 的完整保存与调用。
-- API Key 安全存储策略。
-- OCR 图片识别。
-- PDF / docx 文本提取。
+- Claude / Gemini 原生 adapter。
+- AI 多模态附件输入。
+- AI 流式输出、多轮对话、持久化 AI 回答。
+- API Key 的系统凭据存储策略。
+- 高级 OCR。
+- 数学公式精准识别。
+- 扫描版 PDF 自动 OCR。
+- Word 图片 OCR。
 - 附件内容自动识别并填充字段。
-- 完整艾宾浩斯推荐算法。
-- 首页今日复习完整工作流。
-- 复习完成标记的完整 UI 流程。
-- 数据目录迁移。
+- 复杂艾宾浩斯 / 记忆模型。
 - MySQL 真实连接与切换。
 - ZIP 打包导出。
-- 完整 Windows 安装包发布验证。
+- 正式签名 Windows 安装包发布验证。
 - 自动备份完整策略。
-- 设置页完整功能。
 - 大规模数据性能优化。
 - 自动化测试体系。
 

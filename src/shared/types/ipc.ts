@@ -1,11 +1,14 @@
 import type { ApiResult } from "./api";
 import type {
   AiExtensionStatus,
+  AiExplainMistakeOptions,
   AiExplanationResult,
   Attachment,
   AttachmentFailure,
   AttachmentField,
   AttachmentPreviewResult,
+  AttachmentTextResult,
+  AttachmentTextStatusResult,
   BasicSettingsInfo,
   CreateNodeInput,
   CreateMistakeInput,
@@ -102,11 +105,22 @@ export type MistVaultApi = {
       getStatus: () => Promise<ApiResult<AiExtensionStatus>>;
       explainMistake: (
         mistakeId: string,
-        userQuestion?: string
+        userQuestion?: string,
+        options?: AiExplainMistakeOptions
       ) => Promise<ApiResult<AiExplanationResult>>;
     };
     ocr: {
       getStatus: () => Promise<ApiResult<ExtensionStatus>>;
+    };
+    extraction: {
+      getStatus: (attachmentId: string) => Promise<ApiResult<AttachmentTextStatusResult>>;
+      extractAttachmentText: (attachmentId: string) => Promise<ApiResult<AttachmentTextResult>>;
+      getExtractedText: (attachmentId: string) => Promise<ApiResult<AttachmentTextResult>>;
+      updateExtractedText: (
+        attachmentId: string,
+        text: string
+      ) => Promise<ApiResult<AttachmentTextResult>>;
+      clearExtractedText: (attachmentId: string) => Promise<ApiResult<AttachmentTextStatusResult>>;
     };
     review: {
       getStatus: () => Promise<ApiResult<ExtensionStatus>>;
@@ -158,6 +172,11 @@ export const ipcChannels = {
   extensionAiGetStatus: "extensions:ai:getStatus",
   extensionAiExplainMistake: "extensions:ai:explainMistake",
   extensionOcrGetStatus: "extensions:ocr:getStatus",
+  extensionExtractionGetStatus: "extensions:extraction:getStatus",
+  extensionExtractionExtractAttachmentText: "extensions:extraction:extractAttachmentText",
+  extensionExtractionGetExtractedText: "extensions:extraction:getExtractedText",
+  extensionExtractionUpdateExtractedText: "extensions:extraction:updateExtractedText",
+  extensionExtractionClearExtractedText: "extensions:extraction:clearExtractedText",
   extensionReviewGetStatus: "extensions:review:getStatus",
   extensionReviewGetToday: "extensions:review:getToday",
   extensionReviewMarkReviewed: "extensions:review:markReviewed"

@@ -1,15 +1,23 @@
 # MistVault Specification
 
+> Status note: this file is an early implementation specification and contains historical phase
+> boundaries. For the current initial-release state, use `README.md`, `DEVELOPMENT_PLAN.md`,
+> `MODULE_BOUNDARIES.md`, `DATA_MODEL.md`, `AI_USAGE.md`, and the attachment extraction documents as
+> the source of truth. Current MistVault already includes core CRUD, search, export, settings,
+> review recommendation, AI explanation, bundled OCR runtime, image OCR, text extraction, basic DOCX
+> body extraction, and PDF text-layer extraction.
+
 MistVault is a local Windows mistake notebook for exam preparation.
 
-MistVault now includes the local core notebook flow, a first optional Today Review slice, and a
-first optional AI explanation extension. It still does not implement MySQL runtime switching, OCR,
-packaging, or complex review algorithms.
+MistVault now includes the local core notebook flow, Today Review, AI explanation, bundled OCR
+runtime, image OCR, text extraction, basic DOCX body extraction, PDF text-layer extraction, and
+Windows packaging notes. It still does not implement MySQL runtime switching, advanced OCR,
+scanned-PDF OCR, Word image OCR, AI multimodal input, or complex review algorithms.
 
 The current core CRUD slice adds local subject/chapter management, node-scoped mistake CRUD, keyword
 relations, attachment basics, scoped keyword search, export, settings, and a local optional Today
-Review slice and a first text-only AI explanation slice while keeping OCR, packaging, and complex
-review algorithms out of scope.
+Review slice and a first text-only AI explanation slice. OCR and document extraction are now covered
+by the dedicated attachment extraction docs; complex review algorithms remain out of scope.
 
 ## Core Direction
 
@@ -20,7 +28,7 @@ review algorithms out of scope.
 - Preload exposes a narrow `window.mistVault` API.
 - All IPC calls return `ApiResult<T>`.
 
-## Phase 1 UI
+## Historical Phase 1 UI
 
 - Left column: subject/chapter tree placeholder.
 - Middle column: mistake list placeholder.
@@ -35,8 +43,8 @@ review algorithms out of scope.
 - Export.
 - Data directory migration.
 - MySQL.
-- AI provider SDKs, streaming output, OCR, multimodal input, and persisted AI conversations.
-- OCR.
+- AI provider SDKs, streaming output, multimodal input, and persisted AI conversations.
+- Advanced OCR and scanned-PDF OCR.
 - Review recommendation algorithm.
 
 ## Mistake CRUD And Attachments
@@ -70,7 +78,8 @@ review algorithms out of scope.
 - Results show question text for summary display, keyword labels, node path, and updated time.
 - Result selection opens the existing mistake detail view and preserves attachment behavior.
 - This search slice does not implement question full-text search, answer-analysis search, attachment
-  OCR text search, export, real AI requests, OCR, or Ebbinghaus review recommendation behavior.
+  extracted-attachment-text search, semantic search, export, AI requests, or review recommendation
+  behavior.
 
 ## Export And Share
 
@@ -91,8 +100,8 @@ review algorithms out of scope.
   references without exposing internal IDs or absolute paths.
 - Missing attachment files are written into the main document as missing entries while the rest of
   the export continues.
-- Export does not implement OCR, AI explanation, review recommendation, data-directory migration, or
-  zip packaging in the first version.
+- Export does not run OCR, call AI providers, change review states, migrate the data directory, or
+  create zip packages in the first version.
 
 ## Settings
 
@@ -107,8 +116,9 @@ review algorithms out of scope.
 - Data-directory migration copies the current data payload, validates the copy, writes a stable
   next-launch pointer, and prompts for restart. It does not hot-swap the active database connection
   and does not delete the old data directory.
-- MySQL and OCR settings remain configuration entries or placeholders only. MySQL is not enabled and
-  OCR is not implemented. AI settings configure the optional text-only AI explanation extension.
+- SQLite remains the default database. MySQL is an advanced reserved setting and is not enabled as
+  the runtime database. AI settings configure the optional text-only AI explanation extension. OCR
+  runtime and attachment extraction settings must not require users to install system Tesseract.
   Review recommendation is a local optional extension that uses existing mistake data and
   `review_states`; complex review algorithms are not implemented in this module.
 
@@ -117,10 +127,10 @@ review algorithms out of scope.
 - AI explanation is an optional online extension. Local core features remain usable offline.
 - AI failures, network errors, authentication errors, rate limits, and timeouts are isolated to the
   AI panel and must not affect mistake CRUD, attachments, search, export, settings, or Today Review.
-- The first version sends only the current mistake text context to the selected provider: question,
-  keywords, answer/analysis, note, node path, and safe attachment metadata.
-- Attachment metadata is limited to display filename, MIME type or extension, field, and size.
-- The first version never sends attachment files, file contents, base64, image data URLs, local
+- By default, the first version sends only the current mistake text context to the selected provider:
+  question, keywords, answer/analysis, note, and node path.
+- Extracted attachment text is sent only when the user explicitly selects an attachment-text scope.
+- The first version never sends attachment files, original file bytes, base64, image data URLs, local
   absolute paths, attachment `relativePath`, data-directory paths, or the whole mistake library.
 - AI requests are sent only from Electron main. Renderer calls the whitelisted
   `window.mistVault.extensions.ai` API and never reads API keys or calls providers directly.
@@ -128,8 +138,8 @@ review algorithms out of scope.
   renderer, preload, docs, logs, or error details.
 - The first version supports OpenAI-compatible providers: OpenAI, DeepSeek, Qwen, Kimi, and Doubao.
   Claude and Gemini return unsupported in this version.
-- Future AI work may add streaming output, multi-turn conversation, OCR, multimodal attachments,
-  saved AI answers, and safer secret storage such as Electron `safeStorage`.
+- Future AI work may add streaming output, multi-turn conversation, multimodal attachments, saved AI
+  answers, and safer secret storage such as Electron `safeStorage`.
 
 ## Today Review
 
@@ -143,4 +153,4 @@ review algorithms out of scope.
 - Marking a mistake reviewed increments `review_count`, stores `last_reviewed_at` as an ISO
   timestamp, and computes the next ISO `next_review_at` from the simple interval table.
 - Review recommendation failures stay isolated to the Today Review page and must not affect subject
-  tree, mistake CRUD, attachments, search, export, settings, AI placeholders, or OCR placeholders.
+  tree, mistake CRUD, attachments, search, export, settings, AI, OCR, or attachment extraction.

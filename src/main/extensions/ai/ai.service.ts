@@ -1,11 +1,17 @@
 import type {
   AiExtensionStatus,
+  AiExplainMistakeOptions,
   AiExplanationResult,
   AiMissingField,
   AiProvider,
   ApiResult,
-  Attachment
+  Attachment,
+  AttachmentTextScope
 } from "@shared/types";
+import type {
+  AttachmentExtractedTextForAi,
+  AttachmentTextCacheRepository
+} from "../../repositories/attachmentTextCache.repository";
 import type { AttachmentService } from "../../services/attachment.service";
 import type { MistakeService } from "../../services/mistake.service";
 import type { NodeService } from "../../services/node.service";
@@ -26,6 +32,18 @@ const supportedOpenAiCompatibleProviders = new Set<AiProvider>([
 ]);
 const unsupportedProviders = new Set<AiProvider>(["claude", "gemini"]);
 const timeoutMs = 60_000;
+const attachmentTextScopes = new Set<AttachmentTextScope>([
+  "none",
+  "question",
+  "answerAnalysis",
+  "note",
+  "all"
+]);
+
+const normalizeAttachmentTextScope = (scope: unknown): AttachmentTextScope =>
+  typeof scope === "string" && attachmentTextScopes.has(scope as AttachmentTextScope)
+    ? (scope as AttachmentTextScope)
+    : "none";
 
 const aiErrorMessages: Record<string, string> = {
   AI_NOT_CONFIGURED: "AI 尚未完成配置，请先到设置中选择 provider。",
@@ -53,7 +71,8 @@ export class AiService {
     private readonly settingsService: SettingsService,
     private readonly mistakeService: MistakeService,
     private readonly attachmentService: AttachmentService,
-    private readonly nodeService: NodeService
+    private readonly nodeService: NodeService,
+    private readonly attachmentTextCacheRepository: AttachmentTextCacheRepository
   ) {}
 
   getStatus(): ApiResult<AiExtensionStatus> {
@@ -67,7 +86,8 @@ export class AiService {
 
   async explainMistake(
     mistakeId: string,
-    userQuestion?: string
+    userQuestion?: string,
+    options?: AiExplainMistakeOptions
   ): Promise<ApiResult<AiExplanationResult>> {
     if (typeof mistakeId !== "string" || !mistakeId.trim()) {
       return fail("AI_UNKNOWN_ERROR");
@@ -97,10 +117,24 @@ export class AiService {
     const nodePathResult = this.nodeService.getPath(mistakeResult.data.nodeId);
     const attachmentsResult = this.attachmentService.listForMistake(mistakeId);
     const attachments = attachmentsResult.ok ? attachmentsResult.data : [];
+    const attachmentTextScope = normalizeAttachmentTextScope(options?.attachmentTextScope);
+    let attachmentExtractedTexts: AttachmentExtractedTextForAi[] = [];
+    if (attachmentTextScope !== "none") {
+      try {
+        attachmentExtractedTexts = this.attachmentTextCacheRepository.listSuccessfulTextsForMistake(
+          mistakeId,
+          attachmentTextScope
+        );
+      } catch {
+        return serviceFail("AI_ATTACHMENT_TEXT_FAILED", "附件提取文本读取失败，请稍后重试。");
+      }
+    }
+
     const messages = buildAiExplanationMessages({
       mistake: mistakeResult.data,
       nodePath: nodePathResult.ok ? nodePathResult.data.map((node) => node.name) : [],
       attachments: attachments.map(this.toSafeAttachmentMetadata),
+      attachmentExtractedTexts,
       userQuestion
     });
 

@@ -4,6 +4,9 @@ import type {
   Attachment,
   AttachmentField,
   AttachmentPreviewResult,
+  AttachmentTextResult,
+  AttachmentTextScope,
+  AttachmentTextStatusResult,
   CreateMistakeInput,
   Mistake,
   NodeItem,
@@ -115,6 +118,44 @@ const formatDate = (value: string): string => {
 };
 
 const questionAttachmentPlaceholder = "[题目见附件]";
+const supportedTextExtractionExts = new Set(["txt", "md", "docx", "pdf", "jpg", "jpeg", "png", "bmp"]);
+const ocrExtractionExts = new Set(["jpg", "jpeg", "png", "bmp"]);
+const aiAttachmentTextScopeOptions: { value: AttachmentTextScope; label: string }[] = [
+  { value: "none", label: "不包含附件提取文本" },
+  { value: "question", label: "仅包含题目附件提取文本" },
+  { value: "answerAnalysis", label: "仅包含答案解析附件提取文本" },
+  { value: "note", label: "仅包含备注附件提取文本" },
+  { value: "all", label: "包含全部已提取文本" }
+];
+
+const extractionErrorMessages: Record<string, string> = {
+  EXTRACTION_UNSUPPORTED_TYPE: "该文件类型暂不支持文本提取",
+  EXTRACTION_ATTACHMENT_NOT_FOUND: "附件不存在或已被删除",
+  EXTRACTION_FILE_MISSING: "附件文件不存在",
+  EXTRACTION_PATH_INVALID: "附件路径异常，已阻止访问",
+  EXTRACTION_FILE_TOO_LARGE: "文件过大，暂不支持提取",
+  EXTRACTION_OCR_RUNTIME_MISSING: "内置 OCR 引擎缺失",
+  EXTRACTION_OCR_LANGUAGE_MISSING: "OCR 语言包缺失",
+  EXTRACTION_OCR_FAILED: "OCR 识别失败",
+  EXTRACTION_PARSE_FAILED: "文本解析失败",
+  EXTRACTION_PDF_PARSE_FAILED: "PDF 文本提取失败。该文件可能是扫描版 PDF，第一版暂不支持扫描 PDF 文本提取。",
+  EXTRACTION_TIMEOUT: "提取超时",
+  EXTRACTION_UNKNOWN_ERROR: "提取失败，请稍后重试"
+};
+
+const normalizeAttachmentExt = (attachment: Attachment): string =>
+  (attachment.ext || attachment.originalName.split(".").pop() || "")
+    .replace(/^\./, "")
+    .toLowerCase();
+
+const isExtractionSupported = (attachment: Attachment): boolean =>
+  supportedTextExtractionExts.has(normalizeAttachmentExt(attachment));
+
+const isOcrAttachment = (attachment: Attachment): boolean =>
+  ocrExtractionExts.has(normalizeAttachmentExt(attachment));
+
+const extractionErrorMessage = (code?: string | null, fallback?: string | null): string =>
+  (code ? extractionErrorMessages[code] : null) ?? fallback ?? "提取失败，请稍后重试";
 
 const summarize = (text: string): string => {
   const normalized = text.replace(/\s+/g, " ").trim();
@@ -180,6 +221,362 @@ const AttachmentPreview = ({ attachment, t }: { attachment: Attachment; t: Mista
   return <span className="attachment-preview-note">{preview.message || t("attachmentUnavailable")}</span>;
 };
 
+const AttachmentTextExtractionPanel = ({
+  attachment,
+  activeAttachmentIds
+}: {
+  attachment: Attachment;
+  activeAttachmentIds: ReadonlySet<string>;
+}) => {
+  const supported = isExtractionSupported(attachment);
+  const isOcr = isOcrAttachment(attachment);
+  const [status, setStatus] = useState<AttachmentTextStatusResult | null>(null);
+  const [result, setResult] = useState<AttachmentTextResult | null>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [copyMessage, setCopyMessage] = useState<string | null>(null);
+
+  const attachmentId = attachment.id;
+  const activeAttachmentIdRef = useRef(attachmentId);
+  const isCurrentAttachment = () => activeAttachmentIdRef.current === attachmentId && activeAttachmentIds.has(attachmentId);
+
+  const applyTextResult = (next: AttachmentTextResult) => {
+    if (next.attachmentId !== attachmentId || !isCurrentAttachment()) {
+      return;
+    }
+    setResult(next);
+    setStatus({
+      attachmentId: next.attachmentId,
+      status: next.extractionStatus,
+      sourceType: next.sourceType,
+      hasText: Boolean(next.extractedText),
+      isEdited: next.isEdited,
+      extractedAt: next.extractedAt,
+      editedAt: next.editedAt,
+      errorCode: next.errorCode,
+      errorMessage: next.errorMessage
+    });
+    setDraft(next.extractedText);
+  };
+
+  const applyFailedStatus = (code?: string | null, fallback?: string | null) => {
+    setStatus({
+      attachmentId,
+      status: "failed",
+      sourceType: isOcr ? "ocr" : "text",
+      hasText: false,
+      isEdited: false,
+      extractedAt: null,
+      editedAt: null,
+      errorCode: code ?? "EXTRACTION_UNKNOWN_ERROR",
+      errorMessage: extractionErrorMessage(code, fallback)
+    });
+    setMessage(extractionErrorMessage(code, fallback));
+  };
+
+  const refreshStatus = async (): Promise<AttachmentTextStatusResult | null> => {
+    const statusResult = await mistVaultApi.extensions.extraction.getStatus(attachmentId);
+    if (!isCurrentAttachment()) {
+      return null;
+    }
+    if (statusResult.ok) {
+      setStatus(statusResult.data);
+      return statusResult.data;
+    }
+    setStatus({
+      attachmentId,
+      status: "failed",
+      sourceType: null,
+      hasText: false,
+      isEdited: false,
+      extractedAt: null,
+      editedAt: null,
+      errorCode: statusResult.error.code,
+      errorMessage: extractionErrorMessage(statusResult.error.code, statusResult.error.message)
+    });
+    setMessage(extractionErrorMessage(statusResult.error.code, statusResult.error.message));
+    return null;
+  };
+
+  useEffect(() => {
+    let active = true;
+    activeAttachmentIdRef.current = attachmentId;
+    setStatus(null);
+    setResult(null);
+    setExpanded(false);
+    setEditing(false);
+    setDraft("");
+    setMessage(null);
+    setCopyMessage(null);
+    setBusy(false);
+
+    if (!supported) {
+      setStatus({
+        attachmentId,
+        status: "failed",
+        sourceType: "unsupported",
+        hasText: false,
+        isEdited: false,
+        extractedAt: null,
+        editedAt: null,
+        errorCode: "EXTRACTION_UNSUPPORTED_TYPE",
+        errorMessage: "该文件类型暂不支持文本提取"
+      });
+      return () => {
+        active = false;
+      };
+    }
+
+    const load = async () => {
+      const nextStatus = await refreshStatus();
+      if (!active || !isCurrentAttachment() || !nextStatus) {
+        return;
+      }
+      if (nextStatus.status === "success") {
+        await refreshText();
+      }
+    };
+
+    void load();
+    return () => {
+      active = false;
+      activeAttachmentIdRef.current = "";
+    };
+  }, [activeAttachmentIds, attachment.id, attachmentId, supported]);
+
+  const refreshText = async (): Promise<AttachmentTextResult | null> => {
+    const textResult = await mistVaultApi.extensions.extraction.getExtractedText(attachmentId);
+    if (!isCurrentAttachment()) {
+      return null;
+    }
+    if (!textResult.ok) {
+      setMessage(extractionErrorMessage(textResult.error.code, textResult.error.message));
+      return null;
+    }
+    applyTextResult(textResult.data);
+    return textResult.data;
+  };
+
+  const extract = async (force = false) => {
+    if (!supported || busy) {
+      return;
+    }
+    if (force && status?.isEdited) {
+      const confirmed = window.confirm("当前文本已手动修正，重新提取会覆盖修正内容，是否继续？");
+      if (!confirmed) {
+        return;
+      }
+    }
+
+    setBusy(true);
+    setMessage(null);
+    setCopyMessage(null);
+    setStatus((current) => ({
+      attachmentId,
+      status: "extracting",
+      sourceType: current?.sourceType ?? (isOcr ? "ocr" : "text"),
+      hasText: current?.hasText ?? false,
+      isEdited: current?.isEdited ?? false,
+      extractedAt: current?.extractedAt ?? null,
+      editedAt: current?.editedAt ?? null,
+      errorCode: null,
+      errorMessage: null
+    }));
+
+    const extracted = await mistVaultApi.extensions.extraction.extractAttachmentText(attachmentId);
+    if (!isCurrentAttachment()) {
+      return;
+    }
+    if (extracted.ok) {
+      const nextStatus = await refreshStatus();
+      if (!isCurrentAttachment()) {
+        return;
+      }
+      if (nextStatus?.status === "success") {
+        const nextText = await refreshText();
+        if (!nextText && isCurrentAttachment()) {
+          applyTextResult(extracted.data);
+        }
+      } else {
+        applyTextResult(extracted.data);
+      }
+      setExpanded(true);
+      setEditing(false);
+    } else {
+      applyFailedStatus(extracted.error.code, extracted.error.message);
+    }
+    setBusy(false);
+  };
+
+  const showText = async () => {
+    setExpanded((current) => !current);
+    if (!result && status?.status === "success") {
+      await refreshText();
+    }
+  };
+
+  const startEdit = async () => {
+    const current = result ?? (await refreshText());
+    if (!current) {
+      return;
+    }
+    setDraft(current.extractedText);
+    setExpanded(true);
+    setEditing(true);
+    setMessage(null);
+  };
+
+  const saveEdit = async () => {
+    setBusy(true);
+    setMessage(null);
+    const saved = await mistVaultApi.extensions.extraction.updateExtractedText(attachmentId, draft);
+    if (!isCurrentAttachment()) {
+      return;
+    }
+    if (saved.ok) {
+      applyTextResult(saved.data);
+      await refreshStatus();
+      if (!isCurrentAttachment()) {
+        return;
+      }
+      setEditing(false);
+      setExpanded(true);
+      setMessage("修正文本已保存。");
+    } else {
+      setMessage(extractionErrorMessage(saved.error.code, saved.error.message));
+    }
+    setBusy(false);
+  };
+
+  const copyText = async () => {
+    const current = result ?? (await refreshText());
+    if (!current) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(current.extractedText);
+      setCopyMessage("已复制提取文本。");
+    } catch {
+      setCopyMessage("复制失败，请手动选择文本复制。");
+    }
+  };
+
+  const clearText = async () => {
+    const confirmed = window.confirm("确定清除该附件的提取文本吗？原附件文件不会被删除。");
+    if (!confirmed) {
+      return;
+    }
+    setBusy(true);
+    setMessage(null);
+    const cleared = await mistVaultApi.extensions.extraction.clearExtractedText(attachmentId);
+    if (!isCurrentAttachment()) {
+      return;
+    }
+    if (cleared.ok) {
+      setStatus(cleared.data);
+      setResult(null);
+      setDraft("");
+      setExpanded(false);
+      setEditing(false);
+      setMessage("提取文本已清除。");
+    } else {
+      setMessage(extractionErrorMessage(cleared.error.code, cleared.error.message));
+    }
+    setBusy(false);
+  };
+
+  const currentStatus = status?.status ?? "notExtracted";
+  const unsupported = !supported || status?.sourceType === "unsupported";
+  const statusText = unsupported
+    ? "该文件类型暂不支持文本提取。"
+    : currentStatus === "extracting" || busy
+      ? "正在提取…"
+      : currentStatus === "success"
+        ? status?.isEdited
+          ? "已提取文本 · 已手动修正"
+          : "已提取文本"
+        : currentStatus === "failed"
+          ? extractionErrorMessage(status?.errorCode, status?.errorMessage)
+          : "尚未提取文本";
+
+  return (
+    <div className="attachment-extraction">
+      <div className="attachment-extraction-status">
+        <span>{statusText}</span>
+      </div>
+      {isOcr ? (
+        <p className="attachment-extraction-hint">
+          OCR 适合清晰截图和印刷体文本。数学公式、手写字、低清图片可能识别不准，请核对后再用于 AI 讲解。
+        </p>
+      ) : null}
+      <div className="attachment-extraction-actions">
+        {!unsupported && currentStatus !== "success" ? (
+          <button type="button" onClick={() => void extract(false)} disabled={busy || currentStatus === "extracting"}>
+            {isOcr ? "OCR 识别" : "提取文本"}
+          </button>
+        ) : null}
+        {!unsupported && currentStatus === "success" ? (
+          <>
+            <button type="button" onClick={() => void showText()} disabled={busy}>
+              {expanded ? "收起文本" : "查看文本"}
+            </button>
+            <button type="button" onClick={() => void startEdit()} disabled={busy}>
+              编辑
+            </button>
+            <button type="button" onClick={() => void copyText()} disabled={busy}>
+              复制文本
+            </button>
+            <button type="button" onClick={() => void extract(true)} disabled={busy}>
+              重新提取
+            </button>
+            <button type="button" onClick={() => void clearText()} disabled={busy}>
+              清除提取文本
+            </button>
+          </>
+        ) : null}
+        {!unsupported && currentStatus === "failed" ? (
+          <button type="button" onClick={() => void extract(true)} disabled={busy}>
+            重新提取
+          </button>
+        ) : null}
+      </div>
+      {message ? <p className="state-text compact-state state-warning">{message}</p> : null}
+      {copyMessage ? <p className="state-text compact-state">{copyMessage}</p> : null}
+      {expanded && result ? (
+        <div className="attachment-extracted-text">
+          {editing ? (
+            <>
+              <textarea value={draft} onChange={(event) => setDraft(event.target.value)} disabled={busy} />
+              <div className="attachment-extraction-actions">
+                <button type="button" onClick={() => void saveEdit()} disabled={busy}>
+                  保存修正
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDraft(result.extractedText);
+                    setEditing(false);
+                    setMessage(null);
+                  }}
+                  disabled={busy}
+                >
+                  取消编辑
+                </button>
+              </div>
+            </>
+          ) : (
+            <pre>{result.extractedText || "（空文本）"}</pre>
+          )}
+          {result.truncated ? <p className="state-text compact-state state-warning">文本过长，已截断显示和保存。</p> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+};
+
 export const MistakeDetailPanel = ({
   mode,
   workspaceMode,
@@ -229,6 +626,8 @@ export const MistakeDetailPanel = ({
   const [aiAnswer, setAiAnswer] = useState<string | null>(null);
   const [aiError, setAiError] = useState<string | null>(null);
   const [aiCopyMessage, setAiCopyMessage] = useState<string | null>(null);
+  const [aiAttachmentTextScope, setAiAttachmentTextScope] = useState<AttachmentTextScope>("none");
+  const [aiAttachmentTextNotice, setAiAttachmentTextNotice] = useState<string | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
   const aiRequestSeq = useRef(0);
   const currentMistakeIdRef = useRef<string | null>(null);
@@ -244,6 +643,7 @@ export const MistakeDetailPanel = ({
     }
     return grouped;
   }, [attachments]);
+  const activeAttachmentIds = useMemo(() => new Set(attachments.map((attachment) => attachment.id)), [attachments]);
 
   useEffect(() => {
     if (mode === "create") {
@@ -275,6 +675,8 @@ export const MistakeDetailPanel = ({
     setAiError(null);
     setAiCopyMessage(null);
     setAiQuestion("");
+    setAiAttachmentTextScope("none");
+    setAiAttachmentTextNotice(null);
     setAiLoading(false);
 
     let active = true;
@@ -656,22 +1058,71 @@ export const MistakeDetailPanel = ({
     return null;
   };
 
+  const getAttachmentsForAiScope = (scope: AttachmentTextScope): Attachment[] => {
+    if (scope === "none") {
+      return [];
+    }
+    if (scope === "all") {
+      return attachments;
+    }
+    return attachments.filter((attachment) => attachment.field === scope);
+  };
+
+  const hasAvailableAttachmentText = async (scope: AttachmentTextScope): Promise<boolean> => {
+    const scopedAttachments = getAttachmentsForAiScope(scope);
+    if (scopedAttachments.length === 0) {
+      return false;
+    }
+
+    try {
+      const statuses = await Promise.all(
+        scopedAttachments.map((attachment) =>
+          mistVaultApi.extensions.extraction.getStatus(attachment.id)
+        )
+      );
+      return statuses.some((status) => status.ok && status.data.status === "success" && status.data.hasText);
+    } catch {
+      return false;
+    }
+  };
+
   const generateAiExplanation = async () => {
     if (!mistake) {
       return;
     }
 
     const requestMistakeId = mistake.id;
+    const requestScope = aiAttachmentTextScope;
     const requestSeq = aiRequestSeq.current + 1;
     aiRequestSeq.current = requestSeq;
     setAiLoading(true);
     setAiError(null);
     setAiCopyMessage(null);
+    setAiAttachmentTextNotice(null);
 
     try {
+      const attachmentOnlyQuestion = mistake.question === questionAttachmentPlaceholder;
+      if (requestScope === "none" && attachmentOnlyQuestion) {
+        setAiAttachmentTextNotice(
+          "当前题目主要来自附件。若要让 AI 理解题目，请先完成题目附件的文本提取 / OCR，并在 AI 讲解中选择包含题目附件提取文本。"
+        );
+      }
+      if (requestScope !== "none") {
+        const hasText = await hasAvailableAttachmentText(requestScope);
+        if (aiRequestSeq.current !== requestSeq || currentMistakeIdRef.current !== requestMistakeId) {
+          return;
+        }
+        if (!hasText) {
+          setAiAttachmentTextNotice(
+            "当前选择范围内没有可用的附件提取文本。请先在附件卡片中完成文本提取 / OCR，并核对结果。本次讲解不会包含附件提取文本。"
+          );
+        }
+      }
+
       const result = await mistVaultApi.extensions.ai.explainMistake(
         requestMistakeId,
-        aiQuestion.trim() || undefined
+        aiQuestion.trim() || undefined,
+        { attachmentTextScope: requestScope }
       );
 
       if (aiRequestSeq.current !== requestSeq || currentMistakeIdRef.current !== requestMistakeId) {
@@ -718,17 +1169,40 @@ export const MistakeDetailPanel = ({
       mistake.question === questionAttachmentPlaceholder &&
       !mistake.answerAnalysis?.trim() &&
       !mistake.note?.trim();
-    const canGenerate = Boolean(aiStatus?.ready) && !aiLoading && !attachmentOnlyWithoutText;
+    const attachmentOnlyScopeWarning =
+      attachmentOnlyWithoutText && aiAttachmentTextScope === "none"
+        ? "当前题目主要来自附件。若要让 AI 理解题目，请先完成题目附件的文本提取 / OCR，并在 AI 讲解中选择包含题目附件提取文本。"
+        : null;
+    const canGenerate = Boolean(aiStatus?.ready) && !aiLoading;
 
     return (
       <details className="ai-panel">
         <summary>{t("aiPanelTitle")}</summary>
         <div className="ai-panel-body">
-          {attachmentOnlyWithoutText ? (
-            <p className="state-text state-warning">{t("aiAttachmentOnlyHint")}</p>
-          ) : null}
+          {attachmentOnlyScopeWarning ? <p className="state-text state-warning">{attachmentOnlyScopeWarning}</p> : null}
           {readinessMessage ? <p className="state-text state-warning">{readinessMessage}</p> : null}
+          {aiAttachmentTextNotice ? <p className="state-text state-warning">{aiAttachmentTextNotice}</p> : null}
           {aiError ? <p className="state-text state-error">{aiError}</p> : null}
+          <label className="ai-attachment-text-scope">
+            <span>附件提取文本</span>
+            <select
+              value={aiAttachmentTextScope}
+              onChange={(event) => {
+                setAiAttachmentTextScope(event.target.value as AttachmentTextScope);
+                setAiAttachmentTextNotice(null);
+              }}
+              disabled={aiLoading}
+            >
+              {aiAttachmentTextScopeOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="state-text compact-state">
+            选择包含附件提取文本后，这些文本会随当前错题发送到所选 AI provider。不会发送附件原文件、本地路径或图片。
+          </p>
           <label className="ai-question-field">
             <span>{t("aiQuestionPlaceholder")}</span>
             <textarea
@@ -777,6 +1251,7 @@ export const MistakeDetailPanel = ({
               <strong>{attachment.originalName}</strong>
               <span>{formatSize(attachment.size)} · {attachment.ext || attachment.mimeType || t("attachments")}</span>
               <AttachmentPreview attachment={attachment} t={t} />
+              <AttachmentTextExtractionPanel attachment={attachment} activeAttachmentIds={activeAttachmentIds} />
             </div>
             <div className="detail-actions">
               <button type="button" onClick={() => void openAttachment(attachment)}>

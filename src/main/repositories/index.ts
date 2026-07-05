@@ -1,3 +1,4 @@
+export { AttachmentTextCacheRepository } from "./attachmentTextCache.repository";
 export { AttachmentsRepository } from "./attachments.repository";
 export { KeywordsRepository } from "./keywords.repository";
 export { MistakesRepository } from "./mistakes.repository";

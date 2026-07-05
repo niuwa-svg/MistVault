@@ -67,11 +67,23 @@ export const mistVaultApi: MistVaultApi = {
   extensions: {
     ai: {
       getStatus: () => ipcRenderer.invoke(ipcChannels.extensionAiGetStatus),
-      explainMistake: (mistakeId, userQuestion) =>
-        ipcRenderer.invoke(ipcChannels.extensionAiExplainMistake, mistakeId, userQuestion)
+      explainMistake: (mistakeId, userQuestion, options) =>
+        ipcRenderer.invoke(ipcChannels.extensionAiExplainMistake, mistakeId, userQuestion, options)
     },
     ocr: {
       getStatus: () => ipcRenderer.invoke(ipcChannels.extensionOcrGetStatus)
+    },
+    extraction: {
+      getStatus: (attachmentId) =>
+        ipcRenderer.invoke(ipcChannels.extensionExtractionGetStatus, attachmentId),
+      extractAttachmentText: (attachmentId) =>
+        ipcRenderer.invoke(ipcChannels.extensionExtractionExtractAttachmentText, attachmentId),
+      getExtractedText: (attachmentId) =>
+        ipcRenderer.invoke(ipcChannels.extensionExtractionGetExtractedText, attachmentId),
+      updateExtractedText: (attachmentId, text) =>
+        ipcRenderer.invoke(ipcChannels.extensionExtractionUpdateExtractedText, attachmentId, text),
+      clearExtractedText: (attachmentId) =>
+        ipcRenderer.invoke(ipcChannels.extensionExtractionClearExtractedText, attachmentId)
     },
     review: {
       getStatus: () => ipcRenderer.invoke(ipcChannels.extensionReviewGetStatus),

@@ -14,6 +14,37 @@ export const migrations: DatabaseMigration[] = [
     up: (adapter) => {
       adapter.exec(createInitialSchemaSql);
     }
+  },
+  {
+    version: 2,
+    name: "create_attachment_text_cache",
+    up: (adapter) => {
+      adapter.exec(`
+        CREATE TABLE IF NOT EXISTS attachment_text_cache (
+          attachment_id TEXT PRIMARY KEY REFERENCES attachments(id) ON DELETE CASCADE,
+          original_name TEXT NOT NULL,
+          field TEXT NOT NULL CHECK (field IN ('question', 'answerAnalysis', 'note', 'general')),
+          source_type TEXT NOT NULL CHECK (source_type IN ('text', 'ocr', 'unsupported')),
+          extracted_text TEXT NOT NULL DEFAULT '',
+          extraction_status TEXT NOT NULL CHECK (
+            extraction_status IN ('notExtracted', 'extracting', 'success', 'failed')
+          ),
+          error_code TEXT,
+          error_message TEXT,
+          source_size INTEGER,
+          source_hash TEXT,
+          extracted_at TEXT,
+          is_edited INTEGER NOT NULL DEFAULT 0,
+          edited_at TEXT,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_attachment_text_cache_status
+          ON attachment_text_cache(extraction_status);
+        CREATE INDEX IF NOT EXISTS idx_attachment_text_cache_updated_at
+          ON attachment_text_cache(updated_at);
+      `);
+    }
   }
 ];
 

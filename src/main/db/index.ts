@@ -1,3 +1,4 @@
+import { sanitizeApiErrorDetails } from "@shared/types";
 import type { DatabaseStatus } from "@shared/types";
 import { DatabaseAdapterError } from "./adapters/database.adapter";
 import type { DatabaseAdapter } from "./adapters/database.adapter";
@@ -51,7 +52,7 @@ export const createDatabaseFailureStatus = (
     error: {
       code,
       message,
-      details: error instanceof DatabaseAdapterError ? error.details : error
+      details: sanitizeApiErrorDetails(error instanceof DatabaseAdapterError ? error.details : error)
     }
   };
 };

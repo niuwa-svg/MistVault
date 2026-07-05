@@ -1,7 +1,6 @@
 # Data Model
 
-MistVault uses SQLite as the default local database. The database file is named `mistakes.db`
-and lives in the Electron user data directory, never in the installation directory.
+MistVault 默认使用 SQLite 作为本地数据库。数据库文件名为 `mistakes.db`，位于用户本地数据目录，不位于安装目录。
 
 ## Local Data Directory
 
@@ -16,150 +15,127 @@ MistVault data directory/
   config.json
 ```
 
-Attachments are stored as files under `attachments/`. The database stores only attachment metadata
-and relative paths.
+附件文件保存在 `attachments/` 下。数据库只保存附件元数据和相对路径。导出默认写入 `exports/`，也可以写入用户通过系统对话框选择的目录。
 
-Exports are generated under `exports/` by default, or under a directory selected by the user through
-Electron main's system dialog. Export output is file-based and does not require a schema change.
-
-The stable next-launch data-directory pointer is stored in Electron's `app.getPath("userData")` as
-`mistvault-app-settings.json`. It is application-level configuration and is not treated as part of
-the migrated data-directory payload.
+数据目录迁移的下次启动指针保存在 Electron `app.getPath("userData")` 下的 `mistvault-app-settings.json`，它是应用级配置，不作为被迁移的数据目录内容。
 
 ## SQLite Tables
 
-- `schema_migrations`: applied migration versions.
-- `nodes`: subject/chapter tree nodes with soft delete.
-- `mistakes`: mistake records with soft delete.
-- `keywords`: unique keyword labels.
-- `mistake_keywords`: many-to-many mistake/keyword links.
-- `attachments`: attachment metadata, relative path, size, hash, and soft delete.
-- `mistake_links`: mistake-to-mistake links with a check preventing self-links. Services treat
-  each row as an undirected relationship even though the stored column names are
-  `source_mistake_id` and `target_mistake_id`.
-- `settings`: local key/value settings stored as JSON text.
-- `review_states`: local state for optional today-review recommendations.
+- `schema_migrations`：已执行 migration 版本。
+- `nodes`：科目 / 章节树，支持软删除。
+- `mistakes`：错题记录，支持软删除。
+- `keywords`：唯一关键词。
+- `mistake_keywords`：错题和关键词多对多关系。
+- `attachments`：附件元数据、相对路径、大小、hash 和软删除状态。
+- `mistake_links`：错题关联关系。字段名保留 source / target，但服务层按无向关系处理。
+- `settings`：本地设置，JSON text。
+- `review_states`：本地复习推荐状态。
+- `attachment_text_cache`：附件提取文本缓存。
 
 ## Mistakes, Keywords, And Attachments
 
-The mistake CRUD module uses the existing schema without a new migration.
+- `mistakes.question` 仍为 `TEXT NOT NULL`。
+- 错题必须有题目文本，或至少一个保存成功的 `question` 附件。
+- 如果只有题目附件，没有题目文本，`mistakes.question` 写入 `[题目见附件]` 作为兼容占位。
+- 关键词是文本 tag，不是内容字段，不能挂附件。
+- 错题列表和关键词搜索都排除软删除节点和软删除错题。
+- 虚拟根节点覆盖所有非删除节点下的错题；真实节点范围包含该节点和非删除子孙节点。
 
-- `mistakes.question` remains `TEXT NOT NULL`.
-- A mistake is valid when it has non-empty question text or at least one saved attachment with
-  `field = 'question'`.
-- When the user provides only a question attachment and no question text, `mistakes.question` stores
-  `[题目见附件]` as a compatibility placeholder.
-- `keywords` stores unique keyword labels and `mistake_keywords` stores the many-to-many relation.
-- Service code trims empty keywords and prevents duplicate keyword labels on the same mistake.
-  Keywords are text tags only and never have attachment metadata.
-- Mistake listing and keyword search both scope through non-deleted nodes and exclude soft-deleted
-  mistakes. The virtual MistVault root covers all mistakes under non-deleted nodes. A real node
-  scope covers that node plus all non-deleted descendants.
-- Keyword search reuses `keywords`, `mistake_keywords`, `mistakes`, and `nodes` without a schema
-  change. It searches keyword names with parameterized SQLite `LIKE` and returns node paths as
-  string arrays for renderer display.
+附件保存规则：
 
-Attachments are copied to the local data directory before metadata is saved:
+- `attachments.original_name` 只作为展示元数据。
+- `attachments.stored_name` 使用 UUID 和安全扩展名生成。
+- `attachments.relative_path` 形如 `attachments/<storedName>`。
+- renderer 不接收附件绝对路径或 `relativePath`。
+- 新附件 `field` 限制为 `question`、`answerAnalysis`、`note`。
+- 旧 `general` 行保留兼容，可读可显示。
+- 移除附件只软删除元数据，不删除用户原文件，也不物理删除已复制文件。
 
-- `attachments.original_name` is display-only metadata from the source file.
-- `attachments.stored_name` is generated with a UUID and a safe extension.
-- `attachments.relative_path` is stored as `attachments/<storedName>`; absolute paths are not exposed
-  to the renderer.
-- New `attachments.field` writes are limited to `question`, `answerAnalysis`, and `note`.
-- Existing `general` rows are retained for backward compatibility and can still be read/displayed.
-- `attachments.deleted_at` is used for soft removal. The copied file and the user's original file
-  are not physically deleted by this module.
+附件选择使用 main 进程短期 token。token 到源路径的映射只存在于 main 内存中，过期或复制后失效。
 
-Attachment selection uses short-lived main-process tokens. Tokens map to source absolute paths only
-inside Electron main, expire after a short interval, and are consumed once during copy.
+## Attachment Text Cache
+
+`attachment_text_cache` 按 `attachment_id` 关联附件，保存提取后的纯文本、提取状态、错误码 / 错误信息、源文件大小 / hash、提取时间、编辑时间和用户编辑状态。
+
+该表不保存：
+
+- 本地绝对路径。
+- `attachments.relative_path`。
+- 存储文件名。
+- 原始文件二进制。
+- 图片 base64。
+- PDF / Word 原始二进制。
+- AI prompt payload。
+
+当前已接入的提取能力：
+
+- `txt` / `md`：文本提取。
+- `jpg` / `jpeg` / `png` / `bmp`：通过内置 Tesseract OCR。
+- `docx`：基础正文文本提取。
+- `pdf`：文本层提取。
+
+当前不支持：
+
+- `.doc`。
+- `webp` / `gif` OCR。
+- 扫描版 PDF 自动 OCR。
+- PDF 图片内容识别。
+- Word 图片 OCR。
+- Word 复杂公式、批注、脚注、页眉页脚完整提取。
+
+AI 默认不读取 `attachment_text_cache`。只有用户在 AI 面板明确选择包含附件提取文本时，AI 服务才读取成功缓存的文本，并且仍不发送原文件、路径或 base64。
 
 ## Export Output
 
-The export module reads existing `mistakes`, `keywords`, `mistake_keywords`, `nodes`,
-`attachments`, and `mistake_links` data without changing the schema.
+导出模块读取 `mistakes`、`keywords`、`mistake_keywords`、`nodes`、`attachments`、`mistake_links` 等现有数据，不改变 schema。
 
-- Main documents are generated as `mistakes.txt`, `mistakes.md`, `mistakes.docx`, or `mistakes.pdf`.
-- Original attachment files are copied to `assets/<mistakeId>/` when available.
-- Attachment source paths are resolved from database `relative_path` values under the local
-  `attachments/` directory and are not exposed to the renderer.
-- Missing attachment files are recorded in the main document; other mistakes and attachments still
-  export.
-- The first list/search export uses the mistake IDs currently loaded in the UI, not every possible
-  database match for a search query.
-
-Mistake links are user-facing undirected relationships. New writes store one normalized pair using
-the existing `source_mistake_id` / `target_mistake_id` columns. Reads and deletes check both
-directions so old one-way rows remain compatible without a migration.
+- 主文档生成 `mistakes.txt`、`mistakes.md`、`mistakes.docx` 或 `mistakes.pdf`。
+- 可用附件复制到导出目录的 assets 子目录。
+- 附件源文件由 main 根据数据库相对路径解析，renderer 不接收真实路径。
+- 缺失附件记录在主文档中，不让整次导出全部失败。
+- 当前列表 / 搜索导出使用 UI 已加载的错题 ID，不代表数据库全量搜索导出。
 
 ## Nodes Table
 
-The subject/chapter tree is stored in `nodes`.
+`nodes` 保存科目 / 章节树：
 
-- `parent_id = null` means a root subject.
-- Child chapters point to another node through `parent_id`.
-- The visible "MistVault root" is a virtual UI root and is not written to the database.
-- `sort_order` is reserved for stable ordering and future drag/drop sorting.
-- `deleted_at` is used for soft delete; normal reads exclude deleted nodes.
+- `parent_id = null` 表示根科目。
+- 子章节通过 `parent_id` 指向父节点。
+- UI 中可见的 MistVault root 是虚拟根，不写入数据库。
+- `sort_order` 预留给稳定排序或后续拖拽排序。
+- `deleted_at` 用于软删除。
 
-Deletion and movement are protected by service-layer rules:
+删除和移动由服务层保护：
 
-- Nodes with child nodes cannot be deleted directly.
-- Nodes with non-deleted mistakes cannot be deleted.
-- Moving to the virtual root is stored as `parent_id = null`.
-- A node cannot be moved under itself or under its descendants.
-
-Mistake CRUD uses `node_id` as the stored ownership field, while list/search services expand a
-selected node into that node plus all non-deleted descendants. The node path API provides location
-context for display.
-
-## Access Rule
-
-Repository and service modules in the Electron main process are the only database entry points for
-future core modules. The renderer must not access SQLite, filesystem paths, or Node APIs directly.
-
-## Advanced Database Option
-
-MySQL is reserved behind `DatabaseAdapter` and configuration types. It is not enabled by default and
-does not ship as a required first-version dependency.
-
-Database type preferences are stored in `settings`. SQLite remains the active runtime database even
-when the MySQL advanced entry is configured. MySQL host, port, database, username, and password may
-be stored as local settings in the first version, but read APIs return only `passwordConfigured`.
-This local secret storage is temporary and should later move to Electron `safeStorage` or an OS
-credential store.
+- 有子节点的节点不能直接删除。
+- 有非删除错题的节点不能删除。
+- 移动到虚拟根写作 `parent_id = null`。
+- 节点不能移动到自身或子孙节点下。
 
 ## Settings Values
 
-The settings table stores JSON values for local preferences such as theme, default export format,
-default export path, default attachment inclusion, backup directory, AI provider configuration, OCR
-placeholder state, and review recommendation placeholder settings.
+`settings` 保存本地偏好，包括主题、默认导出格式、默认导出目录、默认是否包含附件、备份目录、AI provider 配置、数据库高级设置、OCR / 提取 / 复习推荐相关设置。
 
-AI API keys follow the same first-version local settings approach as MySQL passwords. Renderer read
-APIs receive only `apiKeyConfigured`, never the key value. Update semantics for secrets are:
-omitted/`undefined` keeps the existing value, an empty string clears it, and a non-empty string
-replaces it.
+AI API Key 和 MySQL 密码只在写入时接收。renderer 读取设置时只得到是否已配置，不得到明文值。第一版 secret 本地保存是临时方案，后续可迁移到 Electron `safeStorage` 或系统凭据存储。
 
-Data-directory migration copies the current data payload entries: `mistakes.db`, SQLite WAL/SHM
-sidecar files when present, `attachments/`, `exports/`, `backups/`, and `config.json`. Missing
-optional directories are created or skipped without failing the migration. The old directory is not
-deleted by the settings module.
+数据目录迁移会复制 `mistakes.db`、SQLite WAL/SHM 文件、`attachments/`、`exports/`、`backups/`、`config.json` 等已知数据项。缺失的可选目录会创建或跳过。旧目录不会被设置模块删除。
 
 ## Review States
 
-`review_states` is keyed by `mistake_id` and is reused for the local Ebbinghaus-style recommendation
-extension. It does not change the core `mistakes` table.
+`review_states` 按 `mistake_id` 关联错题，用于本地复习推荐，不改变核心 `mistakes` 表。
 
-- `review_count`: number of completed reviews.
-- `next_review_at`: ISO timestamp used for due checks.
-- `last_reviewed_at`: ISO timestamp of the last completed review, or `null`.
-- `enabled`: per-mistake recommendation switch reserved for item-level pause/ignore behavior.
-- `updated_at`: ISO timestamp for sorting and maintenance.
+- `review_count`：已完成复习次数。
+- `next_review_at`：下次应复习时间。
+- `last_reviewed_at`：上次完成复习时间。
+- `enabled`：该错题是否参与推荐。
+- `updated_at`：维护和排序时间。
 
-New mistakes best-effort create a review state with `review_count = 0`, `next_review_at` equal to
-the mistake creation time, `last_reviewed_at = null`, and `enabled = 1`. If that best-effort write
-fails, the mistake still saves successfully. The Today Review API lazily inserts missing states for
-existing non-deleted mistakes under non-deleted nodes.
+新错题会 best-effort 创建 review state。失败不阻止错题保存。今日复习 API 会为已有非删除错题懒修复缺失状态。
 
-Recommendation queries include only rows where the mistake and node are not soft-deleted,
-`review_states.enabled = 1`, and `next_review_at <= now`. Dates are stored and compared as ISO
-strings.
+## Advanced Database Option
+
+MySQL 保留在 adapter 和配置类型之后，属于高级预留项。默认数据库始终是 SQLite。即使设置中存在 MySQL 配置，也不表示当前正式切换到 MySQL 运行。
+
+## Access Rule
+
+Electron main 进程中的 repository 和 service 是数据库唯一入口。renderer 不访问 SQLite、文件系统路径或 Node API。

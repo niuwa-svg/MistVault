@@ -1,105 +1,91 @@
 # Development Plan
 
-## Phase 1: Skeleton
+本文档记录 MistVault 当前开发阶段和后续方向。当前状态以初版收口 / 发布候选为准，不把后续调研能力写成已完成能力。
 
-- Initialize Electron + React + TypeScript + Vite.
-- Create main/preload/renderer/shared structure.
-- Add safe `window.mistVault` preload API.
-- Add minimal IPC examples.
-- Create local data directory skeleton.
-- Add three-column UI placeholders.
-- Add noop AI/OCR/review status modules.
+## 当前阶段
 
-## Phase 2: Core Data
+MistVault 已从早期骨架进入初版收口 / 发布候选阶段。当前已完成：
 
-- Add SQLite schema and migration mechanism. Done for the initial local schema.
-- Implement node and mistake repositories. Done for the basic CRUD surface.
-- Implement basic node/mistake services. Done with service-level keyword validation.
-- Add settings, attachment metadata, keyword, and review-state persistence.
-- Reserve MySQL behind adapter/configuration types without enabling it by default.
-- Keep renderer access through IPC only.
+- Electron + React + TypeScript + Vite 主框架。
+- SQLite 本地数据库、迁移机制、数据目录初始化。
+- 科目 / 章节树。
+- 错题新增、查看、编辑、删除、移动。
+- 附件保存、打开、预览、移除。
+- 关键词 tag、关键词搜索、关联错题。
+- `txt` / `md` / `docx` / `pdf` 导出。
+- 设置模块与数据目录迁移入口。
+- 本地艾宾浩斯风格复习推荐。
+- OpenAI-compatible provider 的 AI 讲解初版。
+- AI 输出格式优化：普通中文和纯文本公式风格，避免默认输出大量 LaTeX 符号。
+- OCR runtime 内置与验证。
+- 附件文本提取 Stage 1A：`txt` / `md` 提取，`jpg` / `jpeg` / `png` / `bmp` OCR。
+- 附件文本提取 UI：查看、编辑、保存、复制、重新提取、清除。
+- AI 可选包含附件提取文本。
+- 附件文本提取 Stage 1B：`docx` 基础正文提取，PDF 文本层提取。
+- Windows 初版打包链路曾经跑通过。
 
-## Phase 3: Core UI
+## 已完成阶段
 
-- Implement subject/chapter tree operations. Done for the first UI/API slice:
-  root subject creation, child chapter creation, rename, guarded soft delete, guarded move, and
-  selected-node path display.
-- Implement mistake create/view/edit/delete screens. Done for the first CRUD slice with scoped
-  lists that include the selected node and non-deleted descendants, detail view, editing, text-tag
-  keywords, soft delete, movement to real nodes, and simple undirected ID-based links.
-  Mistake links are treated as undirected relationships at the service/repository layer while using
-  the existing `mistake_links` table.
-- Implement attachment save/open/preview basics. Done for local file selection through main-process
-  tokens, safe copy to `attachments/`, metadata persistence, soft removal, limited image preview,
-  and system-default open for other file types. New attachments target only `question`,
-  `answerAnalysis`, or `note`; legacy `general` attachments remain readable.
-- Use main-process services as the only data access path.
+### Phase 1: Skeleton
 
-The subject/chapter tree module remains limited to node organization. It does not implement mistake
-CRUD, keyword search, attachment upload, export, AI, OCR, or review recommendation logic. The later
-mistake CRUD module should use `selectedNodeId` and `window.mistVault.nodes.getPath(id)` to scope
-and label mistake lists; a selected real node includes its descendants, while the virtual root
-lists all non-deleted node mistakes.
+- 初始化 Electron / React / TypeScript / Vite 项目结构。
+- 建立 main / preload / renderer / shared 分层。
+- 暴露安全的 `window.mistVault` preload API。
+- 建立统一 `ApiResult<T>` IPC 返回结构。
+- 初始化本地数据目录骨架。
 
-The mistake CRUD and attachment module remains limited to persisted CRUD and attachment basics. It
-does not implement keyword search, export, data-directory migration, real AI calls, OCR, or the
-Ebbinghaus review recommendation algorithm. Later modules should consume the exposed mistakes and
-attachments APIs instead of reading the database or filesystem directly.
+### Phase 2: Core Data
 
-## Phase 4: Search And Export
+- 建立 SQLite schema 和 migration 机制。
+- 实现 node、mistake、keyword、attachment、settings、review state 等本地数据模型。
+- 保留 MySQL adapter / 配置类型作为高级预留，但默认运行时仍是 SQLite。
+- renderer 不直接访问 SQLite、文件系统或 Electron main 能力。
 
-- Implement scoped keyword search. Done for the first keyword-search slice: virtual root searches
-  all non-deleted mistakes, real node searches include the node and non-deleted descendants, keyword
-  matching uses `keywords`/`mistake_keywords` with SQLite `LIKE`, and the renderer can open results
-  in the existing mistake detail view.
-- Implement export/share. Done for the first folder-export slice: current mistake, current loaded
-  list, and current loaded search results can export to `txt`, `md`, `docx`, or `pdf`; attachments
-  are copied into user-readable `assets/item-001/<field>/` folders; missing attachments are
-  recorded without failing the whole export.
-- Improve exported study-material layout. Done for Chinese review-style `txt`, `md`, `docx`, and
-  `pdf` output: natural question numbering, no database IDs in the exported body, Chinese empty
-  states, field-adjacent attachment sections, and PDF image embedding for safe image attachments.
-- Keep zip packaging, export templates, DOCX image embedding, more formats, and database-wide full
-  search export as future work.
+### Phase 3: Core UI
 
-## Phase 4.5: Settings
+- 实现科目 / 章节树创建、重命名、移动和受保护删除。
+- 实现错题列表、详情、新增、编辑、删除、移动。
+- 支持题目、解析、笔记字段附件。
+- 附件通过 main 进程安全复制到用户数据目录，renderer 不接触源文件绝对路径。
 
-- Implement settings page and IPC-backed settings read/write.
-- Support immediate and persisted `light` / `dark` / `system` theme selection. `system` is resolved
-  from `prefers-color-scheme` in the renderer.
-- Support default export format, default export directory, and default attachment inclusion. If the
-  saved default directory is unavailable, export falls back to the data-directory `exports/` folder.
-- Add backup preferences without implementing a complex scheduler.
-- Add safe data-directory migration: copy known payload entries, validate, write the next-launch
-  pointer under Electron `app.getPath("userData")`, and prompt for restart. The active SQLite
-  connection is not hot-swapped and the old directory is not deleted.
-- Add database settings entry with SQLite active by default and MySQL advanced configuration
-  reserved but disabled.
-- Add AI provider configuration entry. API keys and MySQL passwords are local settings in the first
-  version; read APIs return only configured state. Future work should migrate secrets to Electron
-  `safeStorage` or an OS credential store.
-- Add OCR and review recommendation placeholders only. No OCR engine, model download, Tesseract
-  install, or complex review algorithm is part of this phase.
+### Phase 4: Search, Export, Settings
 
-## Phase 5: Extensions
+- 实现按关键词和节点范围搜索。
+- 实现 `txt`、`md`、`docx`、`pdf` 导出。
+- 导出会把可用附件复制到导出目录，并记录缺失附件。
+- 实现主题、默认导出格式、默认导出目录、附件导出偏好、备份偏好、AI 配置、数据库高级设置等设置项。
+- 实现安全的数据目录迁移入口：复制已知数据项，写入下次启动指针，不热切换当前 SQLite 连接，不删除旧目录。
 
-- Add AI providers behind interfaces. Done for the first text-only AI explanation slice:
-  OpenAI-compatible providers (`openai`, `deepseek`, `qwen`, `kimi`, `doubao`) use a lightweight
-  main-process fetch adapter; `claude` and `gemini` return unsupported. The first version is
-  non-streaming, sends only current mistake text context and safe attachment metadata, never sends
-  attachment files/local paths/the whole mistake library, and keeps API keys out of renderer,
-  preload, logs, docs, and error details.
-- Add OCR/document parsing behind interfaces.
-- Add review recommendation logic. Done for the first local today-review slice: the top navigation
-  opens a Today Review page, settings can enable/disable recommendations and choose 3/5/10 items,
-  missing `review_states` rows are lazily repaired, due rows exclude soft-deleted mistakes/nodes and
-  disabled review states, and marking reviewed advances the simple interval schedule.
-- Keep every extension optional and failure-isolated.
+### Phase 5: Optional Extensions
 
-The review slice remains intentionally limited. It does not implement AI requests, OCR, attachment
-parsing, export behavior, packaging, schema changes, migrations, or a complex memory model. Mistake
-creation only best-effort initializes review state; failure in that optional write must not block
-core mistake CRUD.
+- AI 讲解初版已完成：支持 OpenAI-compatible provider，非流式返回中文讲解。
+- Claude / Gemini 当前未作为原生 adapter 支持。
+- AI 默认只发送当前错题文本上下文；只有用户明确选择时，才会附带已提取的附件文本。
+- AI 不发送附件原文件、图片 base64、本地路径、整个错题库或无关错题。
+- OCR runtime 已内置到 Windows 包资源中，不依赖系统 PATH 或用户单独安装 Tesseract。
+- 附件文本提取已支持 `txt` / `md`、图片 OCR、`docx` 基础正文、PDF 文本层。
+- 提取失败隔离在附件文本提取功能内，不影响错题 CRUD、附件打开、搜索、导出、设置、复习推荐或 AI 面板基本可用性。
 
-Future AI work may add streaming output, multi-turn conversations, OCR, multimodal attachment input,
-saved AI answers, and safer secret storage. Those are not part of the first AI explanation slice.
+## 当前收口重点
+
+- README 和 docs 与当前实现保持一致。
+- 发布前轻量验证：typecheck、build、数据库验证、OCR runtime 验证、Stage 1A / 1B 提取验证。
+- 打包后验证 `better-sqlite3` native module、OCR runtime、`win-unpacked` 启动、installer 安装和卸载后数据保留。
+- 明确所有用户可见限制，避免把后续能力写成当前能力。
+
+## 后续调研方向
+
+以下能力不是当前初版已完成能力：
+
+- 高级 OCR。
+- 数学公式精准识别。
+- 手写内容高质量识别。
+- 扫描版 PDF 自动 OCR。
+- Word 图片 OCR。
+- AI 多模态附件输入。
+- AI 流式输出、多轮对话、持久化 AI 回答。
+- 云同步和账号系统。
+- MySQL 正式运行时切换。
+- 更完善的安装包签名流程。
+
+这些方向需要单独设计、验证和发布计划，不能在当前文档中描述为已支持。
