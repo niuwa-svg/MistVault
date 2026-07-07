@@ -1,6 +1,7 @@
 import type { DatabaseStatus, DataDirectoryInfo } from "@shared/types";
 import type { DatabaseAdapter } from "../db/adapters/database.adapter";
 import {
+  AiSessionRepository,
   AttachmentTextCacheRepository,
   AttachmentsRepository,
   KeywordsRepository,
@@ -11,6 +12,8 @@ import {
 } from "../repositories";
 import { AiService } from "../extensions/ai/ai.service";
 import { ExportService } from "../export";
+import type { AiSessionServiceOptions } from "./aiSession.service";
+import { AiSessionService } from "./aiSession.service";
 import { AttachmentService } from "./attachment.service";
 import { AttachmentTextExtractionService } from "./attachmentTextExtraction.service";
 import { DatabaseService } from "./database.service";
@@ -22,6 +25,7 @@ import { SettingsService } from "./settings.service";
 import { StorageService } from "./storage.service";
 
 export type CoreServices = {
+  aiSessionService: AiSessionService;
   aiService: AiService;
   attachmentService: AttachmentService;
   attachmentTextExtractionService: AttachmentTextExtractionService;
@@ -39,12 +43,16 @@ export const createCoreServices = (
   dataDirectoryInfo: DataDirectoryInfo,
   databaseStatus: DatabaseStatus,
   appUserDataPath: string,
-  appPath: string
+  appPath: string,
+  options: {
+    aiSessionService?: AiSessionServiceOptions;
+  } = {}
 ): CoreServices => {
   const nodesRepository = new NodesRepository(adapter);
   const keywordsRepository = new KeywordsRepository(adapter);
   const mistakesRepository = new MistakesRepository(adapter, keywordsRepository);
   const attachmentsRepository = new AttachmentsRepository(adapter);
+  const aiSessionRepository = new AiSessionRepository(adapter);
   const attachmentTextCacheRepository = new AttachmentTextCacheRepository(adapter);
   const settingsRepository = new SettingsRepository(adapter);
   const reviewRepository = new ReviewRepository(adapter);
@@ -73,6 +81,14 @@ export const createCoreServices = (
     nodeService,
     attachmentTextCacheRepository
   );
+  const aiSessionService = new AiSessionService(
+    adapter,
+    aiSessionRepository,
+    settingsService,
+    mistakeService,
+    nodeService,
+    options.aiSessionService
+  );
   const ocrRuntimeService = new OcrRuntimeService(appPath);
   const attachmentTextExtractionService = new AttachmentTextExtractionService(
     attachmentsRepository,
@@ -82,6 +98,7 @@ export const createCoreServices = (
   );
 
   return {
+    aiSessionService,
     aiService,
     attachmentService,
     attachmentTextExtractionService,
@@ -103,6 +120,7 @@ export const createCoreServices = (
 
 export { AttachmentService } from "./attachment.service";
 export { AttachmentTextExtractionService } from "./attachmentTextExtraction.service";
+export { AiSessionService } from "./aiSession.service";
 export { AiService } from "../extensions/ai/ai.service";
 export { DatabaseService } from "./database.service";
 export { ExportService } from "../export";

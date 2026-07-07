@@ -45,6 +45,70 @@ export const migrations: DatabaseMigration[] = [
           ON attachment_text_cache(updated_at);
       `);
     }
+  },
+  {
+    version: 3,
+    name: "create_ai_sessions",
+    up: (adapter) => {
+      adapter.exec(`
+        CREATE TABLE IF NOT EXISTS ai_sessions (
+          id TEXT PRIMARY KEY,
+          mistake_id TEXT NOT NULL REFERENCES mistakes(id) ON DELETE CASCADE,
+          title TEXT NOT NULL,
+          status TEXT NOT NULL CHECK (status IN ('active', 'deleted')),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          last_message_at TEXT,
+          deleted_at TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_ai_sessions_mistake_status_last_message
+          ON ai_sessions(mistake_id, status, last_message_at);
+        CREATE INDEX IF NOT EXISTS idx_ai_sessions_deleted_at
+          ON ai_sessions(deleted_at);
+
+        CREATE TABLE IF NOT EXISTS ai_messages (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL REFERENCES ai_sessions(id) ON DELETE CASCADE,
+          seq INTEGER NOT NULL,
+          role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
+          content TEXT NOT NULL,
+          content_format TEXT NOT NULL DEFAULT 'markdown',
+          provider TEXT,
+          model TEXT,
+          status TEXT NOT NULL CHECK (status IN ('pending', 'success', 'failed')),
+          error_code TEXT,
+          error_message TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE (session_id, seq)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_ai_messages_session_seq
+          ON ai_messages(session_id, seq);
+        CREATE INDEX IF NOT EXISTS idx_ai_messages_status
+          ON ai_messages(status);
+
+        CREATE TABLE IF NOT EXISTS ai_message_sources (
+          id TEXT PRIMARY KEY,
+          message_id TEXT NOT NULL REFERENCES ai_messages(id) ON DELETE CASCADE,
+          source_kind TEXT NOT NULL CHECK (
+            source_kind IN ('mistakeText', 'attachmentText', 'imageAttachment')
+          ),
+          attachment_id TEXT REFERENCES attachments(id) ON DELETE SET NULL,
+          original_name TEXT,
+          mime_type TEXT,
+          ext TEXT,
+          size INTEGER,
+          field TEXT CHECK (field IN ('question', 'answerAnalysis', 'note', 'general'))
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_ai_message_sources_message_id
+          ON ai_message_sources(message_id);
+        CREATE INDEX IF NOT EXISTS idx_ai_message_sources_attachment_id
+          ON ai_message_sources(attachment_id);
+      `);
+    }
   }
 ];
 

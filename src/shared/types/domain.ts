@@ -326,6 +326,75 @@ export type AiExplanationResult = {
   generatedAt: string;
 };
 
+export type AiSessionStatus = "active" | "deleted";
+
+export type AiMessageRole = "user" | "assistant" | "system";
+
+export type AiMessageStatus = "pending" | "success" | "failed";
+
+export type AiMessageContentFormat = "markdown";
+
+export type AiContextWarning = "none" | "nearLimit" | "truncated";
+
+export type AiMessageSourceKind = "mistakeText" | "attachmentText" | "imageAttachment";
+
+export type AiSession = {
+  id: EntityId;
+  mistakeId: EntityId;
+  title: string;
+  status: AiSessionStatus;
+  createdAt: string;
+  updatedAt: string;
+  lastMessageAt: string | null;
+  deletedAt: string | null;
+};
+
+export type AiMessageSource = {
+  id: EntityId;
+  messageId: EntityId;
+  sourceKind: AiMessageSourceKind;
+  attachmentId: EntityId | null;
+  originalName: string | null;
+  mimeType: string | null;
+  ext: string | null;
+  size: number | null;
+  field: AttachmentField | null;
+};
+
+export type AiMessage = {
+  id: EntityId;
+  sessionId: EntityId;
+  seq: number;
+  role: AiMessageRole;
+  content: string;
+  contentFormat: AiMessageContentFormat;
+  provider: AiProvider | null;
+  model: string | null;
+  status: AiMessageStatus;
+  errorCode: string | null;
+  errorMessage: string | null;
+  createdAt: string;
+  updatedAt: string;
+  sources: AiMessageSource[];
+};
+
+export type AiSendMessageResult = {
+  session: AiSession;
+  userMessage: AiMessage;
+  assistantMessage: AiMessage;
+  contextWarning: AiContextWarning;
+};
+
+export type AiProviderCapability = {
+  provider: AiProvider;
+  supportsTextChat: boolean;
+  supportsImageInput: boolean;
+  acceptedMimeTypes: string[];
+  maxImageBytes: number | null;
+  maxImagesPerRequest: number;
+  notes?: string;
+};
+
 export type AttachmentTextScope = "none" | "question" | "answerAnalysis" | "note" | "all";
 
 export type AiExplainMistakeOptions = {

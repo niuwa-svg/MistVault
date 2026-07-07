@@ -1,7 +1,7 @@
 import type { AiProvider } from "@shared/types";
 
 export type AiChatMessage = {
-  role: "system" | "user";
+  role: "system" | "user" | "assistant";
   content: string;
 };
 

@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initializeDatabase } from "../src/main/db";
 import { listAppliedMigrations, runMigrations } from "../src/main/db/migrations";
+import type { AiProviderAdapter, AiProviderRequest, AiProviderResponse } from "../src/main/extensions/ai/aiProvider";
 import { createCoreServices } from "../src/main/services";
 import { initializeDataDirectory } from "../src/main/storage/dataDirectory";
 
@@ -28,6 +29,15 @@ const assertFail = (result: { ok: true; data: unknown } | { ok: false; error: { 
   return result.error.code;
 };
 
+const assertNoSensitiveValues = (value: unknown, message: string): void => {
+  const serialized = JSON.stringify(value);
+  assert(!serialized.includes("secret-api-key"), `${message}: exposed API key.`);
+  assert(!serialized.includes("storedName"), `${message}: exposed storedName.`);
+  assert(!serialized.includes("relativePath"), `${message}: exposed relativePath.`);
+  assert(!/[A-Z]:\\/.test(serialized), `${message}: exposed absolute Windows path.`);
+};
+
+const main = async (): Promise<void> => {
 const basePath = mkdtempSync(join(tmpdir(), "mistvault-db-"));
 const dataDirectoryInfo = initializeDataDirectory(basePath);
 
@@ -44,6 +54,10 @@ const initializedDatabase = initializeDatabase({
 
 assert(existsSync(dataDirectoryInfo.databasePath), "SQLite database was not created.");
 assert(initializedDatabase.status.ready, "Database status is not ready.");
+assert(
+  initializedDatabase.status.appliedMigrations.includes(3),
+  "Database should apply AI sessions migration v3."
+);
 
 const beforeMigrations = listAppliedMigrations(initializedDatabase.adapter).join(",");
 const rerunMigrations = runMigrations(initializedDatabase.adapter);
@@ -51,10 +65,31 @@ const afterMigrations = listAppliedMigrations(initializedDatabase.adapter).join(
 assert(rerunMigrations.length === 0, "Migration rerun should not apply new migrations.");
 assert(beforeMigrations === afterMigrations, "Migration rerun changed applied migration state.");
 
+const capturedAiRequests: AiProviderRequest[] = [];
+let fakeAiShouldFail = false;
+const fakeAiProvider: AiProviderAdapter = {
+  async explain(request: AiProviderRequest): Promise<AiProviderResponse> {
+    capturedAiRequests.push(request);
+    if (fakeAiShouldFail) {
+      throw new Error("Provider failed with secret-api-key at C:\\Users\\15268\\secret.txt");
+    }
+    return { content: `Fake AI response ${capturedAiRequests.length}` };
+  }
+};
+
 const services = createCoreServices(
   initializedDatabase.adapter,
   dataDirectoryInfo,
-  initializedDatabase.status
+  initializedDatabase.status,
+  basePath,
+  basePath,
+  {
+    aiSessionService: {
+      providerAdapters: {
+        openai: fakeAiProvider
+      }
+    }
+  }
 );
 
 const node = assertOk(
@@ -408,6 +443,115 @@ assert(aiSettings.provider === "openai", "AI provider update failed.");
 assert(aiSettings.apiKeyConfigured, "AI API key configured flag failed.");
 assert(!("apiKey" in aiSettings), "AI public settings must not expose API key.");
 
+const capabilities = assertOk(services.aiSessionService.getProviderCapabilities());
+assert(
+  capabilities.some(
+    (capability) =>
+      capability.provider === "openai" &&
+      capability.supportsTextChat &&
+      !capability.supportsImageInput
+  ),
+  "AI provider capabilities should expose text chat and keep image input disabled."
+);
+
+const createdSessions = Array.from({ length: 5 }, () =>
+  assertOk(services.aiSessionService.createSession(mistake.id))
+);
+assert(createdSessions.length === 5, "Should create five AI sessions for one mistake.");
+assert(
+  createdSessions.every((session, index) => session.title === `AI 对话 ${index + 1}`),
+  "AI session default titles should be generated."
+);
+assertNoSensitiveValues(createdSessions, "AI session DTO");
+
+const sixthSessionCode = assertFail(services.aiSessionService.createSession(mistake.id));
+assert(
+  sixthSessionCode === "AI_SESSION_LIMIT_REACHED",
+  "Creating the sixth active AI session should be blocked with a clear error."
+);
+
+assertOk(services.aiSessionService.deleteSession(createdSessions[1].id));
+const activeSessionsAfterDelete = assertOk(services.aiSessionService.listSessions(mistake.id));
+assert(
+  activeSessionsAfterDelete.length === 4 &&
+    !activeSessionsAfterDelete.some((session) => session.id === createdSessions[1].id),
+  "Deleted AI session should not appear in active session list."
+);
+assert(
+  assertOk(services.mistakeService.get(mistake.id)).id === mistake.id,
+  "Deleting an AI session should not delete the mistake."
+);
+assert(
+  assertFail(services.aiSessionService.getSessionMessages(createdSessions[1].id)) ===
+    "AI_SESSION_MESSAGES_FAILED",
+  "Deleted AI session messages should not be readable through the public service."
+);
+
+const firstSend = assertOk(
+  await services.aiSessionService.sendMessage(createdSessions[0].id, "请继续讲解这道题。")
+);
+assert(firstSend.contextWarning === "none", "Short AI session should not warn about context.");
+assert(firstSend.userMessage.seq === 1, "First user message seq should be 1.");
+assert(firstSend.assistantMessage.seq === 2, "First assistant message seq should be 2.");
+assert(firstSend.assistantMessage.content === "Fake AI response 1", "AI response should persist.");
+assertNoSensitiveValues(firstSend, "AI sendMessage DTO");
+const firstRequestMessages = capturedAiRequests[0]?.messages ?? [];
+const firstRequestText = firstRequestMessages.map((item) => item.content).join("\n");
+assert(firstRequestText.includes("What is 2 + 2?"), "AI prompt should include current mistake question.");
+assert(firstRequestText.includes("math"), "AI prompt should include current mistake keywords.");
+assert(firstRequestText.includes("请继续讲解这道题。"), "AI prompt should include current user message.");
+assert(!firstRequestText.includes("question-stored.png"), "AI prompt must not include stored attachment names.");
+assert(!firstRequestText.includes("attachments/"), "AI prompt must not include attachment relative paths.");
+assert(!firstRequestText.includes("secret-api-key"), "AI prompt must not include API key.");
+
+const persistedMessages = assertOk(
+  services.aiSessionService.getSessionMessages(createdSessions[0].id)
+);
+assert(persistedMessages.length === 2, "AI messages should persist in the session.");
+assert(
+  persistedMessages[0]?.seq === 1 && persistedMessages[1]?.seq === 2,
+  "AI message seq should increment."
+);
+assertNoSensitiveValues(persistedMessages, "AI message DTO");
+
+const longSession = activeSessionsAfterDelete[0] ?? createdSessions[0];
+let longSend = firstSend;
+for (let index = 0; index < 4; index += 1) {
+  longSend = assertOk(
+    await services.aiSessionService.sendMessage(longSession.id, `${index}: ${"x".repeat(7000)}`)
+  );
+}
+assert(
+  longSend.contextWarning === "truncated",
+  "Long AI session history should return a truncated context warning."
+);
+
+fakeAiShouldFail = true;
+const failedSendCode = assertFail(
+  await services.aiSessionService.sendMessage(createdSessions[2].id, "触发一次失败。")
+);
+assert(failedSendCode === "AI_UNKNOWN_ERROR", "Provider failure should return a safe AI error.");
+const failedMessages = assertOk(services.aiSessionService.getSessionMessages(createdSessions[2].id));
+const failedAssistantMessage = failedMessages.find((message) => message.status === "failed");
+assert(failedAssistantMessage, "Failed assistant message should be persisted.");
+assert(failedAssistantMessage?.errorMessage, "Failed assistant message should include an error summary.");
+assertNoSensitiveValues(failedAssistantMessage, "Failed AI message");
+fakeAiShouldFail = false;
+
+const deletedMistakeForAi = assertOk(
+  services.mistakeService.create({
+    nodeId: node.id,
+    question: "Temporary AI mistake",
+    keywordNames: ["ai-temp"]
+  })
+).mistake;
+assertOk(services.aiSessionService.createSession(deletedMistakeForAi.id));
+assertOk(services.mistakeService.softDelete(deletedMistakeForAi.id));
+assert(
+  assertOk(services.aiSessionService.listSessions(deletedMistakeForAi.id)).length === 0,
+  "AI sessions for soft-deleted mistakes should not be listed."
+);
+
 const databaseSettings = assertOk(
   services.settingsService.updateDatabaseSettings({
     type: "mysql",
@@ -453,3 +597,9 @@ const errorCode = assertFail(services.nodeService.list());
 assert(errorCode === "NODE_LIST_FAILED", "Database error was not converted to ApiResult.");
 
 console.log("MistVault database verification passed.");
+};
+
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});

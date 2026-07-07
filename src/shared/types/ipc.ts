@@ -3,6 +3,10 @@ import type {
   AiExtensionStatus,
   AiExplainMistakeOptions,
   AiExplanationResult,
+  AiMessage,
+  AiProviderCapability,
+  AiSendMessageResult,
+  AiSession,
   Attachment,
   AttachmentFailure,
   AttachmentField,
@@ -103,11 +107,22 @@ export type MistVaultApi = {
   extensions: {
     ai: {
       getStatus: () => Promise<ApiResult<AiExtensionStatus>>;
+      getProviderCapabilities: () => Promise<ApiResult<AiProviderCapability[]>>;
       explainMistake: (
         mistakeId: string,
         userQuestion?: string,
         options?: AiExplainMistakeOptions
       ) => Promise<ApiResult<AiExplanationResult>>;
+      sessions: {
+        listSessions: (mistakeId: string) => Promise<ApiResult<AiSession[]>>;
+        createSession: (mistakeId: string) => Promise<ApiResult<AiSession>>;
+        deleteSession: (sessionId: string) => Promise<ApiResult<{ id: string }>>;
+        getSessionMessages: (sessionId: string) => Promise<ApiResult<AiMessage[]>>;
+        sendMessage: (
+          sessionId: string,
+          content: string
+        ) => Promise<ApiResult<AiSendMessageResult>>;
+      };
     };
     ocr: {
       getStatus: () => Promise<ApiResult<ExtensionStatus>>;
@@ -170,7 +185,13 @@ export const ipcChannels = {
   exportMistakes: "export:exportMistakes",
   exportOpenDirectory: "export:openDirectory",
   extensionAiGetStatus: "extensions:ai:getStatus",
+  extensionAiGetProviderCapabilities: "extensions:ai:getProviderCapabilities",
   extensionAiExplainMistake: "extensions:ai:explainMistake",
+  extensionAiSessionsList: "extensions:ai:sessions:list",
+  extensionAiSessionsCreate: "extensions:ai:sessions:create",
+  extensionAiSessionsDelete: "extensions:ai:sessions:delete",
+  extensionAiSessionMessagesList: "extensions:ai:sessions:messages:list",
+  extensionAiSessionMessageSend: "extensions:ai:sessions:messages:send",
   extensionOcrGetStatus: "extensions:ocr:getStatus",
   extensionExtractionGetStatus: "extensions:extraction:getStatus",
   extensionExtractionExtractAttachmentText: "extensions:extraction:extractAttachmentText",

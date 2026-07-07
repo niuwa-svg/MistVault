@@ -1,3 +1,4 @@
+export { AiSessionRepository } from "./aiSession.repository";
 export { AttachmentTextCacheRepository } from "./attachmentTextCache.repository";
 export { AttachmentsRepository } from "./attachments.repository";
 export { KeywordsRepository } from "./keywords.repository";

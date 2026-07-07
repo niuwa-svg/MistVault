@@ -67,8 +67,22 @@ export const mistVaultApi: MistVaultApi = {
   extensions: {
     ai: {
       getStatus: () => ipcRenderer.invoke(ipcChannels.extensionAiGetStatus),
+      getProviderCapabilities: () =>
+        ipcRenderer.invoke(ipcChannels.extensionAiGetProviderCapabilities),
       explainMistake: (mistakeId, userQuestion, options) =>
-        ipcRenderer.invoke(ipcChannels.extensionAiExplainMistake, mistakeId, userQuestion, options)
+        ipcRenderer.invoke(ipcChannels.extensionAiExplainMistake, mistakeId, userQuestion, options),
+      sessions: {
+        listSessions: (mistakeId) =>
+          ipcRenderer.invoke(ipcChannels.extensionAiSessionsList, mistakeId),
+        createSession: (mistakeId) =>
+          ipcRenderer.invoke(ipcChannels.extensionAiSessionsCreate, mistakeId),
+        deleteSession: (sessionId) =>
+          ipcRenderer.invoke(ipcChannels.extensionAiSessionsDelete, sessionId),
+        getSessionMessages: (sessionId) =>
+          ipcRenderer.invoke(ipcChannels.extensionAiSessionMessagesList, sessionId),
+        sendMessage: (sessionId, content) =>
+          ipcRenderer.invoke(ipcChannels.extensionAiSessionMessageSend, sessionId, content)
+      }
     },
     ocr: {
       getStatus: () => ipcRenderer.invoke(ipcChannels.extensionOcrGetStatus)

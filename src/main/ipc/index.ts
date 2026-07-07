@@ -23,6 +23,7 @@ export const registerIpcHandlers = (
   registerExportIpc(services?.exportService ?? null);
   registerExtensionsIpc(
     services?.aiService ?? null,
+    services?.aiSessionService ?? null,
     services?.reviewService ?? null,
     services?.attachmentTextExtractionService ?? null
   );

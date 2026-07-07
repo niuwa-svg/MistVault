@@ -4,7 +4,12 @@ import type { AiExplainMistakeOptions, AttachmentTextScope } from "@shared/types
 import { getNoopAiStatus } from "../extensions/ai/noopAiProvider";
 import { getNoopOcrStatus } from "../extensions/ocr/noopOcrProvider";
 import { getNoopReviewStatus } from "../extensions/review/noopReviewScheduler";
-import type { AiService, AttachmentTextExtractionService, ReviewService } from "../services";
+import type {
+  AiService,
+  AiSessionService,
+  AttachmentTextExtractionService,
+  ReviewService
+} from "../services";
 
 const reviewUnavailable = () =>
   apiFail("REVIEW_NOT_AVAILABLE", "Review recommendations are unavailable until the database is ready.");
@@ -39,6 +44,7 @@ const normalizeAiOptions = (options: unknown): AiExplainMistakeOptions => {
 
 export const registerExtensionsIpc = (
   aiService: AiService | null = null,
+  aiSessionService: AiSessionService | null = null,
   reviewService: ReviewService | null = null,
   attachmentTextExtractionService: AttachmentTextExtractionService | null = null
 ): void => {
@@ -47,6 +53,18 @@ export const registerExtensionsIpc = (
       return aiService ? aiService.getStatus() : apiOk(getNoopAiStatus());
     } catch (error) {
       return apiFail("AI_STATUS_FAILED", "Failed to read AI extension status.", error);
+    }
+  });
+
+  ipcMain.handle(ipcChannels.extensionAiGetProviderCapabilities, async () => {
+    if (!aiSessionService) {
+      return apiFail("AI_NOT_CONFIGURED", "AI is unavailable until the database is ready.");
+    }
+
+    try {
+      return aiSessionService.getProviderCapabilities();
+    } catch (error) {
+      return apiFail("AI_CAPABILITIES_FAILED", "Failed to read AI provider capabilities.", error);
     }
   });
 
@@ -61,6 +79,53 @@ export const registerExtensionsIpc = (
         return await aiService.explainMistake(mistakeId, userQuestion, normalizeAiOptions(options));
       } catch {
         return apiFail("AI_UNKNOWN_ERROR", "AI explanation failed.");
+      }
+    }
+  );
+
+  ipcMain.handle(ipcChannels.extensionAiSessionsList, async (_event, mistakeId: string) => {
+    if (!aiSessionService) {
+      return apiFail("AI_NOT_CONFIGURED", "AI is unavailable until the database is ready.");
+    }
+
+    return aiSessionService.listSessions(mistakeId);
+  });
+
+  ipcMain.handle(ipcChannels.extensionAiSessionsCreate, async (_event, mistakeId: string) => {
+    if (!aiSessionService) {
+      return apiFail("AI_NOT_CONFIGURED", "AI is unavailable until the database is ready.");
+    }
+
+    return aiSessionService.createSession(mistakeId);
+  });
+
+  ipcMain.handle(ipcChannels.extensionAiSessionsDelete, async (_event, sessionId: string) => {
+    if (!aiSessionService) {
+      return apiFail("AI_NOT_CONFIGURED", "AI is unavailable until the database is ready.");
+    }
+
+    return aiSessionService.deleteSession(sessionId);
+  });
+
+  ipcMain.handle(ipcChannels.extensionAiSessionMessagesList, async (_event, sessionId: string) => {
+    if (!aiSessionService) {
+      return apiFail("AI_NOT_CONFIGURED", "AI is unavailable until the database is ready.");
+    }
+
+    return aiSessionService.getSessionMessages(sessionId);
+  });
+
+  ipcMain.handle(
+    ipcChannels.extensionAiSessionMessageSend,
+    async (_event, sessionId: string, content: string) => {
+      if (!aiSessionService) {
+        return apiFail("AI_NOT_CONFIGURED", "AI is unavailable until the database is ready.");
+      }
+
+      try {
+        return await aiSessionService.sendMessage(sessionId, content);
+      } catch {
+        return apiFail("AI_UNKNOWN_ERROR", "AI session message failed.");
       }
     }
   );
