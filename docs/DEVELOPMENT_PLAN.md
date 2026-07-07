@@ -1,10 +1,10 @@
 # Development Plan
 
-本文档记录 MistVault 当前开发阶段和后续方向。当前状态以初版收口 / 发布候选为准，不把后续调研能力写成已完成能力。
+本文档记录 MistVault 当前开发阶段和后续方向。v0.1 Windows 初版已经发布，当前进入继续开发与稳定性收口阶段；后续调研能力不能写成已完成能力。
 
 ## 当前阶段
 
-MistVault 已从早期骨架进入初版收口 / 发布候选阶段。当前已完成：
+MistVault 已完成 v0.1 Windows 初版发布。当前已完成：
 
 - Electron + React + TypeScript + Vite 主框架。
 - SQLite 本地数据库、迁移机制、数据目录初始化。
