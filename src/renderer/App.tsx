@@ -773,6 +773,11 @@ export const App = () => {
 
   const nodeOptions = useMemo(() => flattenNodePathOptions(nodeTree), [nodeTree]);
   const selectedPathText = selectedPath.length > 0 ? selectedPath.map((node) => node.name).join(" / ") : t("noSelectedNodePath");
+  const runtimeDataStatus = runtimeInfo.dataDirectory
+    ? runtimeInfo.dataDirectory.initialized
+      ? t("runtimeReady")
+      : t("runtimeNotReady")
+    : t("runtimeChecking");
 
   return (
     <AppShell
@@ -921,7 +926,7 @@ export const App = () => {
 
       <footer className="runtime-strip">
         <span>{t("runtimeVersion")}: {runtimeInfo.version}</span>
-        <span>{t("runtimeData")}: {runtimeInfo.dataDirectory ? runtimeInfo.dataDirectory.path : t("runtimeChecking")}</span>
+        <span>{t("runtimeData")}: {runtimeDataStatus}</span>
         <span>
           {t("runtimeDatabase")}: {runtimeInfo.database ? runtimeInfo.database.ready ? t("runtimeReady") : `${t("runtimeNotReady")} (${runtimeInfo.database.message})` : t("runtimeChecking")}
         </span>
