@@ -74,6 +74,9 @@ type LinkCandidate = {
 };
 
 type LinkedPathState = Record<string, string>;
+type AiImageTextStatus = "idle" | "checking" | "hasText" | "none";
+
+const ocrTextDisclaimer = "以下内容是 OCR / 文本提取结果，不是模型直接看到的原图，可能存在识别错误。";
 
 const attachmentDisplayFields: { value: AttachmentField; key: TranslationKey }[] = [
   { value: "question", key: "questionAttachments" },
@@ -153,7 +156,8 @@ const aiSessionErrorMessages: Record<string, string> = {
   AI_SESSION_LIMIT_REACHED: "每道题最多保留 5 个 AI 会话，可删除旧会话后再新建。",
   AI_MESSAGE_CONTENT_REQUIRED: "请输入要追问的内容。",
   AI_MESSAGE_TOO_LONG: "追问内容过长，请控制在 8000 字以内。",
-  AI_IMAGE_INPUT_UNSUPPORTED: "当前 provider/model 暂未启用图片输入，请切换支持图片的模型或使用文本追问。",
+  AI_IMAGE_INPUT_UNSUPPORTED:
+    "当前 provider/model 暂不支持直接图片输入。你仍然可以使用文字追问，或先对图片进行 OCR / 文本提取后发送给 AI。",
   AI_IMAGE_ATTACHMENT_REQUIRED: "请先选择要发送给 AI 分析的图片附件。",
   AI_IMAGE_ATTACHMENT_TOO_MANY: "选择的图片数量超过当前模型限制，请减少后再发送。",
   AI_IMAGE_ATTACHMENT_NOT_FOUND: "选择的图片附件不存在或已被删除。",
@@ -691,6 +695,8 @@ export const MistakeDetailPanel = ({
   const [aiInput, setAiInput] = useState("");
   const [selectedAiImageAttachmentIds, setSelectedAiImageAttachmentIds] = useState<string[]>([]);
   const [aiImagePickerOpen, setAiImagePickerOpen] = useState(false);
+  const [aiImageTextStatus, setAiImageTextStatus] = useState<AiImageTextStatus>("idle");
+  const [aiImageTextBusy, setAiImageTextBusy] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
   const [aiCopyMessage, setAiCopyMessage] = useState<string | null>(null);
   const [aiContextWarning, setAiContextWarning] = useState<AiContextWarning>("none");
@@ -762,6 +768,55 @@ export const MistakeDetailPanel = ({
   }, [aiImageAttachments]);
 
   useEffect(() => {
+    if (!currentAiImageCapability || currentAiImageCapability.supportsImageInput) {
+      return;
+    }
+
+    setSelectedAiImageAttachmentIds([]);
+    setAiImagePickerOpen(false);
+  }, [currentAiImageCapability?.provider, currentAiImageCapability?.supportsImageInput]);
+
+  useEffect(() => {
+    let active = true;
+
+    const checkExtractedText = async () => {
+      if (mode !== "view" || !aiStatus?.ready || currentAiImageCapability?.supportsImageInput) {
+        setAiImageTextStatus("idle");
+        return;
+      }
+
+      if (aiImageAttachments.length === 0) {
+        setAiImageTextStatus("none");
+        return;
+      }
+
+      setAiImageTextStatus("checking");
+      const statuses = await Promise.all(
+        aiImageAttachments.map((attachment) =>
+          mistVaultApi.extensions.extraction.getStatus(attachment.id)
+        )
+      );
+      if (!active) {
+        return;
+      }
+
+      setAiImageTextStatus(
+        statuses.some((status) => status.ok && status.data.hasText) ? "hasText" : "none"
+      );
+    };
+
+    void checkExtractedText();
+    return () => {
+      active = false;
+    };
+  }, [
+    aiImageAttachments,
+    aiStatus?.ready,
+    currentAiImageCapability?.supportsImageInput,
+    mode
+  ]);
+
+  useEffect(() => {
     currentMistakeIdRef.current = mistake?.id ?? null;
     aiRequestSeq.current += 1;
     setAiSessions([]);
@@ -770,6 +825,8 @@ export const MistakeDetailPanel = ({
     setAiInput("");
     setSelectedAiImageAttachmentIds([]);
     setAiImagePickerOpen(false);
+    setAiImageTextStatus("idle");
+    setAiImageTextBusy(false);
     setAiError(null);
     setAiCopyMessage(null);
     setAiContextWarning("none");
@@ -1364,6 +1421,62 @@ export const MistakeDetailPanel = ({
     });
   };
 
+  const appendImageExtractedTextToAiInput = async () => {
+    if (aiImageTextBusy || aiImageAttachments.length === 0) {
+      return;
+    }
+
+    setAiImageTextBusy(true);
+    setAiError(null);
+
+    const textItems: Array<{ attachment: Attachment; text: string; sourceType: string }> = [];
+    for (const attachment of aiImageAttachments) {
+      const status = await mistVaultApi.extensions.extraction.getStatus(attachment.id);
+      if (!status.ok || !status.data.hasText) {
+        continue;
+      }
+
+      const text = await mistVaultApi.extensions.extraction.getExtractedText(attachment.id);
+      if (!text.ok || !text.data.extractedText.trim()) {
+        continue;
+      }
+
+      textItems.push({
+        attachment,
+        text: text.data.extractedText.trim(),
+        sourceType: text.data.sourceType === "ocr" ? "OCR" : "文本提取"
+      });
+    }
+
+    if (textItems.length === 0) {
+      setAiImageTextStatus("none");
+      setAiError("当前图片附件还没有可用的 OCR / 文本提取结果，请先在附件区域进行 OCR / 文本提取。");
+      setAiImageTextBusy(false);
+      return;
+    }
+
+    const extractedTextBlock = [
+      ocrTextDisclaimer,
+      "请基于这些文本进行分析，不要声称你直接看到了图片。",
+      "",
+      ...textItems.map(({ attachment, text, sourceType }) =>
+        [
+          `来源附件：${attachment.originalName}`,
+          `字段：${attachment.field}`,
+          `来源类型：${sourceType}`,
+          "提取文本：",
+          text
+        ].join("\n")
+      )
+    ].join("\n\n");
+
+    setAiInput((current) =>
+      current.trim() ? `${current.trim()}\n\n${extractedTextBlock}` : extractedTextBlock
+    );
+    setAiImageTextStatus("hasText");
+    setAiImageTextBusy(false);
+  };
+
   const sendAiMessage = async () => {
     const content = aiInput.trim();
     if (!activeAiSessionId || aiSending) {
@@ -1538,6 +1651,10 @@ export const MistakeDetailPanel = ({
     const activeContextWarning = contextWarningMessages[aiContextWarning];
     const maxImagesPerRequest = currentAiImageCapability?.maxImagesPerRequest ?? 0;
     const maxImageBytes = currentAiImageCapability?.maxImageBytes ?? null;
+    const imageInputUnsupported =
+      Boolean(aiStatus?.ready) &&
+      Boolean(currentAiImageCapability) &&
+      !currentAiImageCapability?.supportsImageInput;
     const canSend =
       Boolean(activeSession) &&
       Boolean(aiStatus?.ready) &&
@@ -1690,6 +1807,7 @@ export const MistakeDetailPanel = ({
                         >
                           选择图片附件给 AI 分析
                         </button>
+                        {imageInputUnsupported ? <span>当前模型不支持直接读图</span> : null}
                         {selectedAiImageAttachments.length > 0 ? (
                           <span>
                             已选 {selectedAiImageAttachments.length}
@@ -1703,6 +1821,27 @@ export const MistakeDetailPanel = ({
                     </div>
                     {imageCapabilityMessage ? (
                       <p className="state-text compact-state state-warning">{imageCapabilityMessage}</p>
+                    ) : null}
+                    {imageInputUnsupported && aiImageAttachments.length > 0 ? (
+                      <div className="ai-image-text-fallback">
+                        {aiImageTextStatus === "checking" ? (
+                          <p className="state-text compact-state">正在检查图片附件的 OCR / 文本提取结果...</p>
+                        ) : null}
+                        {aiImageTextStatus === "hasText" ? (
+                          <button
+                            type="button"
+                            onClick={() => void appendImageExtractedTextToAiInput()}
+                            disabled={aiSending || aiImageTextBusy}
+                          >
+                            {aiImageTextBusy ? "正在加入提取文本..." : "改用提取文本追问"}
+                          </button>
+                        ) : null}
+                        {aiImageTextStatus === "none" ? (
+                          <p className="state-text compact-state">
+                            请先对附件进行 OCR / 文本提取，再将提取文本发送给 AI。
+                          </p>
+                        ) : null}
+                      </div>
                     ) : null}
                     {selectedAiImageAttachments.length > 0 ? (
                       <ul className="ai-selected-images">

@@ -7,10 +7,7 @@ const maxImageBytes = 10 * 1024 * 1024;
 const maxImagesPerRequest = 5;
 
 const imageModelMatchers: Partial<Record<AiProvider, RegExp[]>> = {
-  openai: [/\bgpt-4o\b/i, /\bgpt-4\.1\b/i],
-  qwen: [/\bqwen(?:2(?:\.5)?|3)?[-_.]?vl\b/i, /\bvision\b/i],
-  kimi: [/\bvision\b/i],
-  doubao: [/\bvision\b/i, /\bvisual\b/i]
+  openai: [/\bgpt-4o\b/i, /\bgpt-4\.1\b/i]
 };
 
 const supportsImageModel = (provider: AiProvider, model?: string | null): boolean => {
@@ -28,16 +25,18 @@ const buildTextCapability = (
 ): AiProviderCapability => {
   const imageEnabled = current?.provider === provider && supportsImageModel(provider, current.model);
   return {
-  provider,
-  supportsTextChat: true,
-  supportsImageInput: imageEnabled,
-  acceptedMimeTypes: imageEnabled ? [...acceptedImageMimeTypes] : [],
-  maxImageBytes: imageEnabled ? maxImageBytes : null,
-  maxImagesPerRequest: imageEnabled ? maxImagesPerRequest : 0,
-  imageInputTransport: imageEnabled ? "base64DataUrl" : null,
-  notes: imageEnabled
-    ? "Image input is enabled only for the current model because its name matches a conservative vision-capable allowlist."
-    : "Text chat is supported. Image input stays disabled unless the current model is explicitly recognized as vision-capable."
+    provider,
+    supportsTextChat: true,
+    supportsImageInput: imageEnabled,
+    acceptedMimeTypes: imageEnabled ? [...acceptedImageMimeTypes] : [],
+    maxImageBytes: imageEnabled ? maxImageBytes : null,
+    maxImagesPerRequest: imageEnabled ? maxImagesPerRequest : 0,
+    imageInputTransport: imageEnabled ? "base64DataUrl" : null,
+    notes: imageEnabled
+      ? "Image input is enabled only for the current OpenAI model because its name matches the vision-capable allowlist."
+      : provider === "deepseek"
+        ? "DeepSeek is treated as text-only. OpenAI-compatible API format does not imply image input support."
+        : "Text chat is supported. Image input stays disabled unless official docs and the exact model confirm vision input."
   };
 };
 

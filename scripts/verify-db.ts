@@ -86,7 +86,8 @@ const services = createCoreServices(
   {
     aiSessionService: {
       providerAdapters: {
-        openai: fakeAiProvider
+        openai: fakeAiProvider,
+        deepseek: fakeAiProvider
       }
     }
   }
@@ -521,6 +522,16 @@ assert(
   ),
   "AI provider capabilities should expose text chat and keep image input disabled."
 );
+assert(
+  capabilities.some(
+    (capability) =>
+      capability.provider === "deepseek" &&
+      capability.supportsTextChat &&
+      !capability.supportsImageInput &&
+      capability.imageInputTransport === null
+  ),
+  "DeepSeek should be exposed as text-only."
+);
 
 const createdSessions = Array.from({ length: 5 }, () =>
   assertOk(services.aiSessionService.createSession(mistake.id))
@@ -579,6 +590,81 @@ assert(
     })
   ) === "AI_IMAGE_INPUT_UNSUPPORTED",
   "Image attachment sending should be blocked when the current model is not vision-capable."
+);
+const beforeSecondUnsupportedImageRequestCount = capturedAiRequests.length;
+assert(
+  assertFail(
+    await services.aiSessionService.sendMessage(createdSessions[0].id, "image unsupported boundary", {
+      imageAttachmentIds: [attachment.id]
+    })
+  ) === "AI_IMAGE_INPUT_UNSUPPORTED",
+  "Unsupported image input should keep returning a safe error."
+);
+assert(
+  capturedAiRequests.length === beforeSecondUnsupportedImageRequestCount,
+  "Unsupported image input must be blocked before provider request construction."
+);
+
+const textOnlyAfterUnsupportedImage = assertOk(
+  await services.aiSessionService.sendMessage(createdSessions[0].id, "text only still works")
+);
+assert(
+  textOnlyAfterUnsupportedImage.assistantMessage.content,
+  "Text-only AI conversation should remain available when image input is unsupported."
+);
+const textOnlyRequestText = JSON.stringify(capturedAiRequests[capturedAiRequests.length - 1]?.messages ?? []);
+assert(!textOnlyRequestText.includes("data:image"), "Text-only request must not include image data URLs.");
+assert(!textOnlyRequestText.includes("image_url"), "Text-only request must not include image_url parts.");
+
+assertOk(
+  services.settingsService.updateAiSettings({
+    provider: "deepseek",
+    model: "deepseek-v4-pro"
+  })
+);
+const deepseekCapabilities = assertOk(services.aiSessionService.getProviderCapabilities());
+const deepseekCapability = deepseekCapabilities.find((capability) => capability.provider === "deepseek");
+assert(
+  deepseekCapability?.supportsTextChat &&
+    !deepseekCapability.supportsImageInput &&
+    deepseekCapability.imageInputTransport === null,
+  "DeepSeek should remain text-only even though it uses an OpenAI-compatible API format."
+);
+const deepseekTextSend = assertOk(
+  await services.aiSessionService.sendMessage(createdSessions[3].id, "deepseek text only")
+);
+assert(deepseekTextSend.assistantMessage.content, "DeepSeek text-only AI session should remain available.");
+const beforeDeepseekImageCount = capturedAiRequests.length;
+assert(
+  assertFail(
+    await services.aiSessionService.sendMessage(createdSessions[3].id, "deepseek image blocked", {
+      imageAttachmentIds: [attachment.id]
+    })
+  ) === "AI_IMAGE_INPUT_UNSUPPORTED",
+  "DeepSeek image input should be disabled."
+);
+assert(
+  capturedAiRequests.length === beforeDeepseekImageCount,
+  "DeepSeek image input must not reach the provider."
+);
+
+assertOk(
+  services.settingsService.updateAiSettings({
+    provider: "qwen",
+    model: "qwen-vl-plus"
+  })
+);
+const qwenCapabilities = assertOk(services.aiSessionService.getProviderCapabilities());
+const qwenCapability = qwenCapabilities.find((capability) => capability.provider === "qwen");
+assert(
+  qwenCapability?.supportsTextChat && !qwenCapability.supportsImageInput,
+  "Qwen should stay text-only until official docs and exact model support are confirmed."
+);
+assertOk(
+  services.settingsService.updateAiSettings({
+    provider: "openai",
+    model: "example-model"
+  })
 );
 
 assertOk(
@@ -660,7 +746,7 @@ assert(!imageRequestText.includes("secret-api-key"), "Image prompt must not incl
 const persistedMessages = assertOk(
   services.aiSessionService.getSessionMessages(createdSessions[0].id)
 );
-assert(persistedMessages.length === 4, "AI messages should persist in the session.");
+assert(persistedMessages.length === 6, "AI messages should persist in the session.");
 assert(
   persistedMessages[0]?.seq === 1 && persistedMessages[1]?.seq === 2,
   "AI message seq should increment."

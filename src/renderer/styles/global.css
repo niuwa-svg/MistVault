@@ -768,6 +768,13 @@ button:disabled {
   padding: 8px;
 }
 
+.ai-image-text-fallback {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .ai-image-option {
   align-items: flex-start;
   border: 1px solid var(--border);

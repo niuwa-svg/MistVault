@@ -78,7 +78,8 @@ const aiErrorMessages: Record<string, string> = {
 };
 
 const aiImageErrorMessages: Record<string, string> = {
-  AI_IMAGE_INPUT_UNSUPPORTED: "当前 provider/model 暂未启用图片输入，请切换支持图片的模型或使用文本追问。",
+  AI_IMAGE_INPUT_UNSUPPORTED:
+    "当前 provider/model 暂不支持直接图片输入。你仍然可以使用文字追问，或先对图片进行 OCR / 文本提取后发送给 AI。",
   AI_IMAGE_ATTACHMENT_REQUIRED: "请先选择要发送给 AI 分析的图片附件。",
   AI_IMAGE_ATTACHMENT_TOO_MANY: "选择的图片数量超过当前模型限制，请减少后再发送。",
   AI_IMAGE_ATTACHMENT_NOT_FOUND: "选择的图片附件不存在或已被删除。",
