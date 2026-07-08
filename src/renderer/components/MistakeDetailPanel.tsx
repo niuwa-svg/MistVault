@@ -1798,7 +1798,7 @@ export const MistakeDetailPanel = ({
                         }}
                         maxLength={maxAiUserMessageChars}
                         placeholder="输入你想继续追问的内容"
-                        disabled={aiSending || !activeSession}
+                        disabled={!activeSession}
                       />
                     </label>
                     <div className="ai-composer-actions">
