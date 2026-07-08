@@ -385,6 +385,12 @@ export type AiSendMessageResult = {
   contextWarning: AiContextWarning;
 };
 
+export type AiSendMessageOptions = {
+  imageAttachmentIds?: EntityId[];
+};
+
+export type AiImageInputTransport = "base64DataUrl";
+
 export type AiProviderCapability = {
   provider: AiProvider;
   supportsTextChat: boolean;
@@ -392,6 +398,7 @@ export type AiProviderCapability = {
   acceptedMimeTypes: string[];
   maxImageBytes: number | null;
   maxImagesPerRequest: number;
+  imageInputTransport: AiImageInputTransport | null;
   notes?: string;
 };
 

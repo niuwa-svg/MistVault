@@ -3,6 +3,7 @@ import type {
   AiContextWarning,
   AiExtensionStatus,
   AiMessage,
+  AiProviderCapability,
   AiSession,
   Attachment,
   AttachmentField,
@@ -123,6 +124,8 @@ const formatDate = (value: string): string => {
 const questionAttachmentPlaceholder = "[题目见附件]";
 const supportedTextExtractionExts = new Set(["txt", "md", "docx", "pdf", "jpg", "jpeg", "png", "bmp"]);
 const ocrExtractionExts = new Set(["jpg", "jpeg", "png", "bmp"]);
+const aiImageAttachmentExts = new Set(["jpg", "jpeg", "png", "webp", "bmp"]);
+const aiImageAttachmentMimeTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/bmp"]);
 const maxAiSessionsPerMistake = 5;
 const maxAiUserMessageChars = 8000;
 
@@ -150,6 +153,15 @@ const aiSessionErrorMessages: Record<string, string> = {
   AI_SESSION_LIMIT_REACHED: "每道题最多保留 5 个 AI 会话，可删除旧会话后再新建。",
   AI_MESSAGE_CONTENT_REQUIRED: "请输入要追问的内容。",
   AI_MESSAGE_TOO_LONG: "追问内容过长，请控制在 8000 字以内。",
+  AI_IMAGE_INPUT_UNSUPPORTED: "当前 provider/model 暂未启用图片输入，请切换支持图片的模型或使用文本追问。",
+  AI_IMAGE_ATTACHMENT_REQUIRED: "请先选择要发送给 AI 分析的图片附件。",
+  AI_IMAGE_ATTACHMENT_TOO_MANY: "选择的图片数量超过当前模型限制，请减少后再发送。",
+  AI_IMAGE_ATTACHMENT_NOT_FOUND: "选择的图片附件不存在或已被删除。",
+  AI_IMAGE_ATTACHMENT_FORBIDDEN: "选择的图片附件不属于当前错题，已阻止发送。",
+  AI_IMAGE_ATTACHMENT_UNSUPPORTED_TYPE: "当前版本仅支持图片附件发送给 AI；PDF / Word 可先使用文本提取后再复制追问，或等待后续版本。",
+  AI_IMAGE_ATTACHMENT_FILE_MISSING: "选择的图片附件文件缺失，请重新添加附件后再试。",
+  AI_IMAGE_ATTACHMENT_PATH_INVALID: "选择的图片附件路径异常，已阻止发送。",
+  AI_IMAGE_ATTACHMENT_TOO_LARGE: "选择的图片超过当前模型大小限制，请压缩或减少图片后再试。",
   AI_SESSION_CREATE_FAILED: "新建 AI 会话失败，请稍后重试。",
   AI_SESSION_DELETE_FAILED: "删除 AI 会话失败，请稍后重试。",
   AI_SESSION_MESSAGES_FAILED: "读取 AI 会话消息失败，请稍后重试。",
@@ -175,6 +187,12 @@ const normalizeAttachmentExt = (attachment: Attachment): string =>
   (attachment.ext || attachment.originalName.split(".").pop() || "")
     .replace(/^\./, "")
     .toLowerCase();
+
+const isAiImageAttachment = (attachment: Attachment): boolean => {
+  const ext = normalizeAttachmentExt(attachment);
+  const mimeType = attachment.mimeType.trim().toLowerCase();
+  return aiImageAttachmentExts.has(ext) && (!mimeType || aiImageAttachmentMimeTypes.has(mimeType));
+};
 
 const isExtractionSupported = (attachment: Attachment): boolean =>
   supportedTextExtractionExts.has(normalizeAttachmentExt(attachment));
@@ -666,10 +684,13 @@ export const MistakeDetailPanel = ({
   const [linkedPaths, setLinkedPaths] = useState<LinkedPathState>({});
   const [localError, setLocalError] = useState<string | null>(null);
   const [aiStatus, setAiStatus] = useState<AiExtensionStatus | null>(null);
+  const [aiProviderCapabilities, setAiProviderCapabilities] = useState<AiProviderCapability[]>([]);
   const [aiSessions, setAiSessions] = useState<AiSession[]>([]);
   const [activeAiSessionId, setActiveAiSessionId] = useState<string | null>(null);
   const [aiMessages, setAiMessages] = useState<AiMessage[]>([]);
   const [aiInput, setAiInput] = useState("");
+  const [selectedAiImageAttachmentIds, setSelectedAiImageAttachmentIds] = useState<string[]>([]);
+  const [aiImagePickerOpen, setAiImagePickerOpen] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
   const [aiCopyMessage, setAiCopyMessage] = useState<string | null>(null);
   const [aiContextWarning, setAiContextWarning] = useState<AiContextWarning>("none");
@@ -692,6 +713,23 @@ export const MistakeDetailPanel = ({
     return grouped;
   }, [attachments]);
   const activeAttachmentIds = useMemo(() => new Set(attachments.map((attachment) => attachment.id)), [attachments]);
+  const aiImageAttachments = useMemo(
+    () => attachments.filter((attachment) => isAiImageAttachment(attachment)),
+    [attachments]
+  );
+  const currentAiImageCapability = useMemo(
+    () =>
+      aiProviderCapabilities.find((capability) => capability.provider === aiStatus?.provider) ??
+      null,
+    [aiProviderCapabilities, aiStatus?.provider]
+  );
+  const selectedAiImageAttachments = useMemo(
+    () =>
+      selectedAiImageAttachmentIds
+        .map((id) => aiImageAttachments.find((attachment) => attachment.id === id))
+        .filter((attachment): attachment is Attachment => Boolean(attachment)),
+    [aiImageAttachments, selectedAiImageAttachmentIds]
+  );
 
   useEffect(() => {
     if (mode === "create") {
@@ -717,15 +755,25 @@ export const MistakeDetailPanel = ({
   }, [mode, mistake]);
 
   useEffect(() => {
+    const validImageIds = new Set(aiImageAttachments.map((attachment) => attachment.id));
+    setSelectedAiImageAttachmentIds((current) =>
+      current.filter((attachmentId) => validImageIds.has(attachmentId))
+    );
+  }, [aiImageAttachments]);
+
+  useEffect(() => {
     currentMistakeIdRef.current = mistake?.id ?? null;
     aiRequestSeq.current += 1;
     setAiSessions([]);
     setActiveAiSessionId(null);
     setAiMessages([]);
     setAiInput("");
+    setSelectedAiImageAttachmentIds([]);
+    setAiImagePickerOpen(false);
     setAiError(null);
     setAiCopyMessage(null);
     setAiContextWarning("none");
+    setAiProviderCapabilities([]);
     setAiSessionsLoading(false);
     setAiMessagesLoading(false);
     setAiSessionBusy(false);
@@ -736,7 +784,10 @@ export const MistakeDetailPanel = ({
     const requestSeq = aiRequestSeq.current;
 
     const loadAiStatus = async () => {
-      const result = await mistVaultApi.extensions.ai.getStatus();
+      const [result, capabilitiesResult] = await Promise.all([
+        mistVaultApi.extensions.ai.getStatus(),
+        mistVaultApi.extensions.ai.getProviderCapabilities()
+      ]);
       if (!active || aiRequestSeq.current !== requestSeq || currentMistakeIdRef.current !== requestMistakeId) {
         return;
       }
@@ -746,6 +797,9 @@ export const MistakeDetailPanel = ({
       } else {
         setAiStatus(null);
         setAiError(aiErrorMessage(result.error.code, result.error.message));
+      }
+      if (capabilitiesResult.ok) {
+        setAiProviderCapabilities(capabilitiesResult.data);
       }
     };
 
@@ -1205,6 +1259,8 @@ export const MistakeDetailPanel = ({
     setActiveAiSessionId(sessionId);
     setAiMessages([]);
     setAiInput("");
+    setSelectedAiImageAttachmentIds([]);
+    setAiImagePickerOpen(false);
     setAiError(null);
     setAiCopyMessage(null);
     setAiContextWarning("none");
@@ -1228,6 +1284,8 @@ export const MistakeDetailPanel = ({
     if (result.ok) {
       await refreshAiSessions(result.data.id);
       setAiMessages([]);
+      setSelectedAiImageAttachmentIds([]);
+      setAiImagePickerOpen(false);
       setAiContextWarning("none");
     } else {
       setAiError(aiErrorMessage(result.error.code, result.error.message));
@@ -1267,6 +1325,45 @@ export const MistakeDetailPanel = ({
     setAiSessionBusy(false);
   };
 
+  const getAiImageCapabilityMessage = (): string | null => {
+    if (!aiStatus?.ready) {
+      return getAiReadinessMessage();
+    }
+
+    if (!currentAiImageCapability?.supportsImageInput) {
+      return aiSessionErrorMessages.AI_IMAGE_INPUT_UNSUPPORTED;
+    }
+
+    return null;
+  };
+
+  const toggleAiImageAttachment = (attachment: Attachment) => {
+    const capability = currentAiImageCapability;
+    if (!capability?.supportsImageInput) {
+      setAiError(aiSessionErrorMessages.AI_IMAGE_INPUT_UNSUPPORTED);
+      return;
+    }
+
+    if (capability.maxImageBytes !== null && attachment.size > capability.maxImageBytes) {
+      setAiError(aiSessionErrorMessages.AI_IMAGE_ATTACHMENT_TOO_LARGE);
+      return;
+    }
+
+    setSelectedAiImageAttachmentIds((current) => {
+      if (current.includes(attachment.id)) {
+        return current.filter((id) => id !== attachment.id);
+      }
+
+      if (current.length >= capability.maxImagesPerRequest) {
+        setAiError(aiSessionErrorMessages.AI_IMAGE_ATTACHMENT_TOO_MANY);
+        return current;
+      }
+
+      setAiError(null);
+      return [...current, attachment.id];
+    });
+  };
+
   const sendAiMessage = async () => {
     const content = aiInput.trim();
     if (!activeAiSessionId || aiSending) {
@@ -1287,6 +1384,39 @@ export const MistakeDetailPanel = ({
       return;
     }
 
+    const selectedImageIds = selectedAiImageAttachmentIds.filter((id) =>
+      aiImageAttachments.some((attachment) => attachment.id === id)
+    );
+    if (selectedImageIds.length > 0) {
+      const imageCapabilityMessage = getAiImageCapabilityMessage();
+      if (imageCapabilityMessage) {
+        setAiError(imageCapabilityMessage);
+        return;
+      }
+
+      const maxImages = currentAiImageCapability?.maxImagesPerRequest ?? 0;
+      if (maxImages > 0 && selectedImageIds.length > maxImages) {
+        setAiError(aiSessionErrorMessages.AI_IMAGE_ATTACHMENT_TOO_MANY);
+        return;
+      }
+
+      const maxImageBytes = currentAiImageCapability?.maxImageBytes ?? null;
+      if (
+        maxImageBytes !== null &&
+        selectedAiImageAttachments.some((attachment) => attachment.size > maxImageBytes)
+      ) {
+        setAiError(aiSessionErrorMessages.AI_IMAGE_ATTACHMENT_TOO_LARGE);
+        return;
+      }
+
+      const confirmed = window.confirm(
+        "你选择的图片附件将发送给当前配置的第三方 AI provider 进行分析。请确认图片中不包含不希望上传的隐私信息。MistVault 不会发送本地文件路径、数据库路径、内部文件名或整个错题库。"
+      );
+      if (!confirmed) {
+        return;
+      }
+    }
+
     const now = new Date().toISOString();
     const nextSeq = aiMessages.reduce((max, message) => Math.max(max, message.seq), 0) + 1;
     const optimisticUserMessage: AiMessage = {
@@ -1303,7 +1433,17 @@ export const MistakeDetailPanel = ({
       errorMessage: null,
       createdAt: now,
       updatedAt: now,
-      sources: []
+      sources: selectedAiImageAttachments.map((attachment, index) => ({
+        id: `local-source-${now}-${index}`,
+        messageId: `local-user-${now}`,
+        sourceKind: "imageAttachment",
+        attachmentId: attachment.id,
+        originalName: attachment.originalName,
+        mimeType: attachment.mimeType || null,
+        ext: attachment.ext || normalizeAttachmentExt(attachment),
+        size: attachment.size,
+        field: attachment.field
+      }))
     };
     const optimisticAssistantMessage: AiMessage = {
       id: `local-assistant-${now}`,
@@ -1329,13 +1469,19 @@ export const MistakeDetailPanel = ({
     setAiInput("");
     setAiMessages((current) => [...current, optimisticUserMessage, optimisticAssistantMessage]);
 
-    const result = await mistVaultApi.extensions.ai.sessions.sendMessage(activeAiSessionId, content);
+    const result = await mistVaultApi.extensions.ai.sessions.sendMessage(
+      activeAiSessionId,
+      content,
+      selectedImageIds.length > 0 ? { imageAttachmentIds: selectedImageIds } : undefined
+    );
     if (currentMistakeIdRef.current !== (mistake?.id ?? null)) {
       return;
     }
 
     if (result.ok) {
       setAiContextWarning(result.data.contextWarning);
+      setSelectedAiImageAttachmentIds([]);
+      setAiImagePickerOpen(false);
     } else {
       setAiError(aiErrorMessage(result.error.code, result.error.message));
     }
@@ -1355,15 +1501,43 @@ export const MistakeDetailPanel = ({
     }
   };
 
+  const renderAiMessageSources = (message: AiMessage) => {
+    const imageSources = message.sources.filter((source) => source.sourceKind === "imageAttachment");
+    if (imageSources.length === 0) {
+      return null;
+    }
+
+    return (
+      <div className="ai-message-sources">
+        <strong>本次随消息发送了 {imageSources.length} 个图片附件</strong>
+        <ul>
+          {imageSources.map((source) => (
+            <li key={source.id}>
+              <span>{source.originalName || "图片附件"}</span>
+              <small>
+                {[source.field, source.size !== null ? formatSize(source.size) : null, source.ext || source.mimeType]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </small>
+            </li>
+          ))}
+        </ul>
+      </div>
+    );
+  };
+
   const renderAiPanel = () => {
     if (!mistake) {
       return null;
     }
 
     const readinessMessage = getAiReadinessMessage();
+    const imageCapabilityMessage = getAiImageCapabilityMessage();
     const sessionLimitReached = aiSessions.length >= maxAiSessionsPerMistake;
     const activeSession = aiSessions.find((session) => session.id === activeAiSessionId) ?? null;
     const activeContextWarning = contextWarningMessages[aiContextWarning];
+    const maxImagesPerRequest = currentAiImageCapability?.maxImagesPerRequest ?? 0;
+    const maxImageBytes = currentAiImageCapability?.maxImageBytes ?? null;
     const canSend =
       Boolean(activeSession) &&
       Boolean(aiStatus?.ready) &&
@@ -1477,6 +1651,7 @@ export const MistakeDetailPanel = ({
                             {message.status !== "pending" && message.content ? (
                               isAssistant ? <SafeMarkdown content={message.content} /> : <p>{message.content}</p>
                             ) : null}
+                            {renderAiMessageSources(message)}
                           </div>
                         </article>
                       );
@@ -1506,10 +1681,78 @@ export const MistakeDetailPanel = ({
                       <span className={aiInput.length > maxAiUserMessageChars ? "state-error" : ""}>
                         {aiInput.length}/{maxAiUserMessageChars}
                       </span>
+                      <div className="ai-image-attachment-tools">
+                        <button
+                          type="button"
+                          onClick={() => setAiImagePickerOpen((current) => !current)}
+                          disabled={!activeSession || aiSending || Boolean(imageCapabilityMessage)}
+                          title={imageCapabilityMessage ?? "选择图片附件给 AI 分析"}
+                        >
+                          选择图片附件给 AI 分析
+                        </button>
+                        {selectedAiImageAttachments.length > 0 ? (
+                          <span>
+                            已选 {selectedAiImageAttachments.length}
+                            {maxImagesPerRequest > 0 ? `/${maxImagesPerRequest}` : ""} 张
+                          </span>
+                        ) : null}
+                      </div>
                       <button type="submit" disabled={!canSend}>
                         {aiSending ? "发送中..." : "发送"}
                       </button>
                     </div>
+                    {imageCapabilityMessage ? (
+                      <p className="state-text compact-state state-warning">{imageCapabilityMessage}</p>
+                    ) : null}
+                    {selectedAiImageAttachments.length > 0 ? (
+                      <ul className="ai-selected-images">
+                        {selectedAiImageAttachments.map((attachment) => (
+                          <li key={attachment.id}>
+                            <span>
+                              {attachment.originalName} · {attachment.field} · {formatSize(attachment.size)}
+                            </span>
+                            <button type="button" onClick={() => toggleAiImageAttachment(attachment)} disabled={aiSending}>
+                              移除
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+                    {aiImagePickerOpen && !imageCapabilityMessage ? (
+                      <div className="ai-image-picker">
+                        {aiImageAttachments.length === 0 ? (
+                          <p className="state-text compact-state">当前题没有可发送给 AI 的图片附件。</p>
+                        ) : (
+                          aiImageAttachments.map((attachment) => {
+                            const checked = selectedAiImageAttachmentIds.includes(attachment.id);
+                            const tooLarge = maxImageBytes !== null && attachment.size > maxImageBytes;
+                            const atLimit =
+                              !checked &&
+                              maxImagesPerRequest > 0 &&
+                              selectedAiImageAttachmentIds.length >= maxImagesPerRequest;
+                            return (
+                              <label key={attachment.id} className="ai-image-option">
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  disabled={aiSending || tooLarge || atLimit}
+                                  onChange={() => toggleAiImageAttachment(attachment)}
+                                />
+                                <span>
+                                  <strong>{attachment.originalName}</strong>
+                                  <small>
+                                    {[attachment.field, formatSize(attachment.size), attachment.ext || attachment.mimeType]
+                                      .filter(Boolean)
+                                      .join(" · ")}
+                                  </small>
+                                  {tooLarge ? <small className="state-error">图片超过当前模型大小限制</small> : null}
+                                </span>
+                              </label>
+                            );
+                          })
+                        )}
+                      </div>
+                    ) : null}
                   </form>
                 </>
               ) : (

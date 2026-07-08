@@ -71,6 +71,18 @@ export type CreateAiMessageRecord = {
   createdAt: string;
 };
 
+export type CreateAiMessageSourceRecord = {
+  id: string;
+  messageId: string;
+  sourceKind: AiMessageSourceKind;
+  attachmentId: string | null;
+  originalName: string | null;
+  mimeType: string | null;
+  ext: string | null;
+  size: number | null;
+  field: AttachmentField | null;
+};
+
 export type UpdateAiMessageRecord = {
   id: string;
   content: string;
@@ -264,6 +276,34 @@ export class AiSessionRepository {
     return message;
   }
 
+  appendMessageSource(record: CreateAiMessageSourceRecord): AiMessageSource {
+    this.adapter.run(
+      `
+        INSERT INTO ai_message_sources (
+          id, message_id, source_kind, attachment_id, original_name, mime_type, ext, size, field
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      [
+        record.id,
+        record.messageId,
+        record.sourceKind,
+        record.attachmentId,
+        record.originalName,
+        record.mimeType,
+        record.ext,
+        record.size,
+        record.field
+      ]
+    );
+
+    const source = this.getMessageSourceById(record.id);
+    if (!source) {
+      throw new Error("AI_MESSAGE_SOURCE_NOT_FOUND_AFTER_CREATE");
+    }
+    return source;
+  }
+
   updateMessage(record: UpdateAiMessageRecord): AiMessage {
     this.adapter.run(
       `
@@ -355,5 +395,17 @@ export class AiSessionRepository {
         [messageId]
       )
       .map(mapSource);
+  }
+
+  private getMessageSourceById(sourceId: string): AiMessageSource | null {
+    const row = this.adapter.get<AiMessageSourceRow>(
+      `
+        SELECT id, message_id, source_kind, attachment_id, original_name, mime_type, ext, size, field
+        FROM ai_message_sources
+        WHERE id = ?
+      `,
+      [sourceId]
+    );
+    return row ? mapSource(row) : null;
   }
 }

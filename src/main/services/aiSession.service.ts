@@ -1,25 +1,35 @@
 import { randomUUID } from "node:crypto";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { resolve, sep } from "node:path";
 import type {
   AiContextWarning,
   AiMessage,
+  AiSendMessageOptions,
   AiProvider,
   AiProviderCapability,
   AiSendMessageResult,
+  Attachment,
+  AttachmentField,
   AiSession,
   ApiResult,
+  DataDirectoryInfo,
   Mistake
 } from "@shared/types";
 import { sanitizeApiErrorDetails } from "@shared/types";
 import type { DatabaseAdapter } from "../db/adapters/database.adapter";
-import type { AiSessionRepository } from "../repositories";
+import type { AiSessionRepository, AttachmentsRepository } from "../repositories";
 import type { NodeService } from "./node.service";
 import type { PrivateAiSettings, SettingsService } from "./settings.service";
 import { captureServiceError, serviceFail, serviceOk } from "./serviceResult";
-import type { AiChatMessage, AiProviderAdapter } from "../extensions/ai/aiProvider";
+import type {
+  AiChatMessage,
+  AiChatMessageContentPart,
+  AiProviderAdapter
+} from "../extensions/ai/aiProvider";
 import { AiProviderFailure } from "../extensions/ai/aiProvider";
 import { OpenAiCompatibleProvider } from "../extensions/ai/providers/openaiCompatible.provider";
 import { UnsupportedAiProvider } from "../extensions/ai/providers/unsupported.provider";
-import { getAiProviderCapabilities } from "../extensions/ai/providerCapabilities";
+import { getAiProviderCapabilities, getAiProviderCapability } from "../extensions/ai/providerCapabilities";
 import type { MistakeService } from "./mistake.service";
 
 export type AiSessionServiceOptions = {
@@ -32,6 +42,16 @@ const nearLimitHistoryChars = Math.floor(maxHistoryChars * 0.8);
 const maxTurns = 20;
 const timeoutMs = 60_000;
 const maxUserMessageChars = 8_000;
+const imageAttachmentSourceKind = "imageAttachment";
+const supportedImageExts = new Set([".jpg", ".jpeg", ".png", ".webp", ".bmp"]);
+const supportedImageMimeTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/bmp"]);
+const mimeByExt = new Map<string, string>([
+  [".jpg", "image/jpeg"],
+  [".jpeg", "image/jpeg"],
+  [".png", "image/png"],
+  [".webp", "image/webp"],
+  [".bmp", "image/bmp"]
+]);
 
 const supportedOpenAiCompatibleProviders = new Set<AiProvider>([
   "openai",
@@ -57,8 +77,26 @@ const aiErrorMessages: Record<string, string> = {
   AI_UNKNOWN_ERROR: "AI 会话请求失败，请稍后重试。"
 };
 
-const fail = (code: keyof typeof aiErrorMessages): ApiResult<never> =>
-  serviceFail(code, aiErrorMessages[code]);
+const aiImageErrorMessages: Record<string, string> = {
+  AI_IMAGE_INPUT_UNSUPPORTED: "当前 provider/model 暂未启用图片输入，请切换支持图片的模型或使用文本追问。",
+  AI_IMAGE_ATTACHMENT_REQUIRED: "请先选择要发送给 AI 分析的图片附件。",
+  AI_IMAGE_ATTACHMENT_TOO_MANY: "选择的图片数量超过当前模型限制，请减少后再发送。",
+  AI_IMAGE_ATTACHMENT_NOT_FOUND: "选择的图片附件不存在或已被删除。",
+  AI_IMAGE_ATTACHMENT_FORBIDDEN: "选择的图片附件不属于当前错题，已阻止发送。",
+  AI_IMAGE_ATTACHMENT_UNSUPPORTED_TYPE:
+    "当前版本仅支持图片附件发送给 AI；PDF / Word 可先使用文本提取后再复制追问，或等待后续版本。",
+  AI_IMAGE_ATTACHMENT_FILE_MISSING: "选择的图片附件文件缺失，请重新添加附件后再试。",
+  AI_IMAGE_ATTACHMENT_PATH_INVALID: "选择的图片附件路径异常，已阻止发送。",
+  AI_IMAGE_ATTACHMENT_TOO_LARGE: "选择的图片超过当前模型大小限制，请压缩或减少图片后再试。"
+};
+
+const allAiErrorMessages: Record<string, string> = {
+  ...aiErrorMessages,
+  ...aiImageErrorMessages
+};
+
+const fail = (code: keyof typeof allAiErrorMessages): ApiResult<never> =>
+  serviceFail(code, allAiErrorMessages[code]);
 
 const validateId = (value: unknown): value is string => typeof value === "string" && Boolean(value.trim());
 
@@ -114,6 +152,94 @@ const sanitizeStoredErrorMessage = (
 type SelectedHistory = {
   messages: AiChatMessage[];
   warning: AiContextWarning;
+};
+
+type PreparedImageAttachment = {
+  attachment: Attachment;
+  mimeType: string;
+  size: number;
+  dataUrl: string;
+};
+
+const normalizeImageExt = (attachment: Attachment): string => {
+  const fallbackExt = attachment.originalName.includes(".")
+    ? attachment.originalName.slice(attachment.originalName.lastIndexOf("."))
+    : "";
+  const rawExt = (attachment.ext || fallbackExt).trim().toLowerCase();
+  return rawExt && !rawExt.startsWith(".") ? `.${rawExt}` : rawExt;
+};
+
+const detectImageMimeType = (attachment: Attachment): string => {
+  const normalizedMimeType = attachment.mimeType.trim().toLowerCase();
+  if (supportedImageMimeTypes.has(normalizedMimeType)) {
+    return normalizedMimeType;
+  }
+
+  return mimeByExt.get(normalizeImageExt(attachment)) ?? "";
+};
+
+const isWithinDirectory = (childPath: string, parentPath: string): boolean => {
+  const parent = resolve(parentPath);
+  const child = resolve(childPath);
+  return child === parent || child.startsWith(`${parent}${sep}`);
+};
+
+const createImageInstructionText = (content: string, imageCount: number): string =>
+  [
+    `用户已明确选择将 ${imageCount} 个当前错题图片附件发送给 AI 分析。`,
+    "这些图片来自当前错题附件；不要假装看到了未发送的附件，也不要根据文件名过度推断内容。",
+    "如果图片不清晰或信息不足，请要求用户补充文本。",
+    "回答仍使用中文 Markdown + LaTeX；行内公式用 \\( ... \\)，块级公式用 $$ ... $$。",
+    "不要输出原始 HTML、script、iframe、远程图片，也不要请求或输出 API Key、本地路径、storedName、relativePath、base64 或 data URL。",
+    "",
+    "用户追问：",
+    content
+  ].join("\n");
+
+const attachImagesToLastUserMessage = (
+  messages: AiChatMessage[],
+  content: string,
+  images: PreparedImageAttachment[]
+): AiChatMessage[] => {
+  if (images.length === 0) {
+    return messages;
+  }
+
+  const nextMessages = messages.map((message) => ({ ...message }));
+  for (let index = nextMessages.length - 1; index >= 0; index -= 1) {
+    const message = nextMessages[index];
+    if (message?.role !== "user" || typeof message.content !== "string") {
+      continue;
+    }
+
+    if (message.content.trim() !== content.trim()) {
+      continue;
+    }
+
+    const parts: AiChatMessageContentPart[] = [
+      { type: "text", text: createImageInstructionText(content.trim(), images.length) },
+      ...images.map((image) => ({
+        type: "image_url" as const,
+        image_url: { url: image.dataUrl }
+      }))
+    ];
+    nextMessages[index] = { ...message, content: parts };
+    return nextMessages;
+  }
+
+  return [
+    ...nextMessages,
+    {
+      role: "user",
+      content: [
+        { type: "text", text: createImageInstructionText(content.trim(), images.length) },
+        ...images.map((image) => ({
+          type: "image_url" as const,
+          image_url: { url: image.dataUrl }
+        }))
+      ]
+    }
+  ];
 };
 
 const selectHistoryMessages = (messages: AiMessage[]): SelectedHistory => {
@@ -213,16 +339,28 @@ export class AiSessionService {
   constructor(
     private readonly adapter: DatabaseAdapter,
     private readonly aiSessionRepository: AiSessionRepository,
+    private readonly attachmentsRepository: AttachmentsRepository,
     private readonly settingsService: SettingsService,
     private readonly mistakeService: MistakeService,
     private readonly nodeService: NodeService,
+    private readonly dataDirectoryInfo: DataDirectoryInfo,
     options: AiSessionServiceOptions = {}
   ) {
     this.providerAdapters = options.providerAdapters ?? {};
   }
 
   getProviderCapabilities(): ApiResult<AiProviderCapability[]> {
-    return serviceOk(getAiProviderCapabilities());
+    const settingsResult = this.settingsService.getPrivateAiSettings();
+    if (!settingsResult.ok) {
+      return serviceOk(getAiProviderCapabilities());
+    }
+
+    return serviceOk(
+      getAiProviderCapabilities({
+        provider: settingsResult.data.provider as AiProvider | null,
+        model: settingsResult.data.model
+      })
+    );
   }
 
   listSessions(mistakeId: string): ApiResult<AiSession[]> {
@@ -318,7 +456,11 @@ export class AiSessionService {
     }, "AI_SESSION_MESSAGES_FAILED", "Failed to list AI session messages.");
   }
 
-  async sendMessage(sessionId: string, content: string): Promise<ApiResult<AiSendMessageResult>> {
+  async sendMessage(
+    sessionId: string,
+    content: string,
+    options: AiSendMessageOptions = {}
+  ): Promise<ApiResult<AiSendMessageResult>> {
     if (!validateId(sessionId)) {
       return serviceFail("AI_SESSION_ID_INVALID", "AI session id is invalid.");
     }
@@ -344,6 +486,7 @@ export class AiSessionService {
     if (unsupportedProviders.has(provider)) {
       return fail("AI_PROVIDER_UNSUPPORTED");
     }
+    const capability = getAiProviderCapability(provider, settings.model);
 
     const session = this.aiSessionRepository.getActiveSessionById(sessionId);
     if (!session) {
@@ -355,20 +498,46 @@ export class AiSessionService {
       return serviceFail("AI_SESSION_MISTAKE_NOT_FOUND", "The session's mistake was not found.");
     }
 
+    const imageAttachmentIds = this.normalizeImageAttachmentIds(options.imageAttachmentIds);
+    const preparedImages = this.prepareImageAttachments(
+      imageAttachmentIds,
+      mistakeResult.data.id,
+      capability
+    );
+    if (!preparedImages.ok) {
+      return serviceFail(preparedImages.error.code, preparedImages.error.message);
+    }
+
     const now = new Date().toISOString();
     const { userMessage, assistantMessage } = this.adapter.transaction(() => ({
-      userMessage: this.aiSessionRepository.appendMessage({
-        id: randomUUID(),
-        sessionId,
-        role: "user",
-        content: content.trim(),
-        provider: null,
-        model: null,
-        status: "success",
-        errorCode: null,
-        errorMessage: null,
-        createdAt: now
-      }),
+      userMessage: (() => {
+        const message = this.aiSessionRepository.appendMessage({
+          id: randomUUID(),
+          sessionId,
+          role: "user",
+          content: content.trim(),
+          provider: null,
+          model: null,
+          status: "success",
+          errorCode: null,
+          errorMessage: null,
+          createdAt: now
+        });
+        for (const image of preparedImages.data) {
+          this.aiSessionRepository.appendMessageSource({
+            id: randomUUID(),
+            messageId: message.id,
+            sourceKind: imageAttachmentSourceKind,
+            attachmentId: image.attachment.id,
+            originalName: image.attachment.originalName,
+            mimeType: image.mimeType,
+            ext: normalizeImageExt(image.attachment),
+            size: image.size,
+            field: image.attachment.field as AttachmentField
+          });
+        }
+        return this.aiSessionRepository.getMessageById(message.id) ?? message;
+      })(),
       assistantMessage: this.aiSessionRepository.appendMessage({
         id: randomUUID(),
         sessionId,
@@ -391,6 +560,11 @@ export class AiSessionService {
       nodePathResult.ok ? nodePathResult.data.map((node) => node.name) : [],
       selectedHistory.messages
     );
+    const requestMessages = attachImagesToLastUserMessage(
+      providerMessages,
+      content.trim(),
+      preparedImages.data
+    );
 
     try {
       const adapter = this.getAdapter(provider);
@@ -402,7 +576,7 @@ export class AiSessionService {
           apiKey: settings.apiKey as string,
           timeoutMs
         },
-        messages: providerMessages
+        messages: requestMessages
       });
 
       const updatedAssistant = this.aiSessionRepository.updateMessage({
@@ -424,13 +598,13 @@ export class AiSessionService {
       });
     } catch (error) {
       const code =
-        error instanceof AiProviderFailure && error.code in aiErrorMessages
+        error instanceof AiProviderFailure && error.code in allAiErrorMessages
           ? error.code
           : "AI_UNKNOWN_ERROR";
       const safeMessage =
         error instanceof AiProviderFailure
-          ? aiErrorMessages[code]
-          : sanitizeStoredErrorMessage(error, aiErrorMessages.AI_UNKNOWN_ERROR, [settings.apiKey]);
+          ? allAiErrorMessages[code]
+          : sanitizeStoredErrorMessage(error, allAiErrorMessages.AI_UNKNOWN_ERROR, [settings.apiKey]);
 
       this.aiSessionRepository.updateMessage({
         id: assistantMessage.id,
@@ -443,7 +617,7 @@ export class AiSessionService {
         updatedAt: new Date().toISOString()
       });
 
-      return serviceFail(code, aiErrorMessages[code]);
+      return serviceFail(code, allAiErrorMessages[code]);
     }
   }
 
@@ -464,6 +638,104 @@ export class AiSessionService {
       return "AI_API_KEY_MISSING";
     }
     return null;
+  }
+
+  private normalizeImageAttachmentIds(value: unknown): string[] {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return Array.from(
+      new Set(
+        value
+          .filter((item): item is string => validateId(item))
+          .map((item) => item.trim())
+      )
+    );
+  }
+
+  private prepareImageAttachments(
+    attachmentIds: string[],
+    mistakeId: string,
+    capability: AiProviderCapability | null
+  ): ApiResult<PreparedImageAttachment[]> {
+    if (attachmentIds.length === 0) {
+      return serviceOk([]);
+    }
+
+    if (
+      !capability?.supportsImageInput ||
+      capability.imageInputTransport !== "base64DataUrl" ||
+      capability.maxImagesPerRequest <= 0
+    ) {
+      return fail("AI_IMAGE_INPUT_UNSUPPORTED");
+    }
+
+    if (attachmentIds.length > capability.maxImagesPerRequest) {
+      return fail("AI_IMAGE_ATTACHMENT_TOO_MANY");
+    }
+
+    const acceptedMimeTypes = new Set(capability.acceptedMimeTypes);
+    const prepared: PreparedImageAttachment[] = [];
+
+    for (const attachmentId of attachmentIds) {
+      const attachment = this.attachmentsRepository.getById(attachmentId);
+      if (!attachment) {
+        return fail("AI_IMAGE_ATTACHMENT_NOT_FOUND");
+      }
+
+      if (attachment.mistakeId !== mistakeId) {
+        return fail("AI_IMAGE_ATTACHMENT_FORBIDDEN");
+      }
+
+      const ext = normalizeImageExt(attachment);
+      const mimeType = detectImageMimeType(attachment);
+      if (
+        !supportedImageExts.has(ext) ||
+        !supportedImageMimeTypes.has(mimeType) ||
+        !acceptedMimeTypes.has(mimeType)
+      ) {
+        return fail("AI_IMAGE_ATTACHMENT_UNSUPPORTED_TYPE");
+      }
+
+      const absolutePath = resolve(this.dataDirectoryInfo.path, attachment.relativePath);
+      if (!isWithinDirectory(absolutePath, this.dataDirectoryInfo.attachmentsPath)) {
+        return fail("AI_IMAGE_ATTACHMENT_PATH_INVALID");
+      }
+
+      if (!existsSync(absolutePath)) {
+        return fail("AI_IMAGE_ATTACHMENT_FILE_MISSING");
+      }
+
+      let size = attachment.size;
+      try {
+        const stats = statSync(absolutePath);
+        if (!stats.isFile()) {
+          return fail("AI_IMAGE_ATTACHMENT_FILE_MISSING");
+        }
+        size = stats.size;
+      } catch {
+        return fail("AI_IMAGE_ATTACHMENT_FILE_MISSING");
+      }
+
+      if (capability.maxImageBytes !== null && size > capability.maxImageBytes) {
+        return fail("AI_IMAGE_ATTACHMENT_TOO_LARGE");
+      }
+
+      try {
+        const file = readFileSync(absolutePath);
+        prepared.push({
+          attachment,
+          mimeType,
+          size,
+          dataUrl: `data:${mimeType};base64,${file.toString("base64")}`
+        });
+      } catch {
+        return fail("AI_IMAGE_ATTACHMENT_FILE_MISSING");
+      }
+    }
+
+    return serviceOk(prepared);
   }
 
   private getAdapter(provider: AiProvider): AiProviderAdapter {

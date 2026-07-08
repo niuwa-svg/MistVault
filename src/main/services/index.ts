@@ -84,9 +84,11 @@ export const createCoreServices = (
   const aiSessionService = new AiSessionService(
     adapter,
     aiSessionRepository,
+    attachmentsRepository,
     settingsService,
     mistakeService,
     nodeService,
+    dataDirectoryInfo,
     options.aiSessionService
   );
   const ocrRuntimeService = new OcrRuntimeService(appPath);

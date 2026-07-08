@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initializeDatabase } from "../src/main/db";
@@ -289,6 +289,11 @@ const disabledReview = assertOk(services.reviewService.getTodayRecommendations()
 assert(!disabledReview.enabled, "Review recommendations should be disabled by default.");
 assert(disabledReview.items.length === 0, "Disabled review recommendations should not return items.");
 
+const questionImageBytes = Buffer.from(
+  "89504e470d0a1a0a0000000d4948445200000001000000010802000000907753de0000000c4944415408d763f8ffff3f0005fe02fea5574890000000049454e44ae426082",
+  "hex"
+);
+writeFileSync(join(dataDirectoryInfo.attachmentsPath, "question-stored.png"), questionImageBytes);
 const attachment = assertOk(
   services.attachmentService.createMetadata({
     mistakeId: mistake.id,
@@ -298,13 +303,76 @@ const attachment = assertOk(
     mimeType: "image/png",
     ext: ".png",
     relativePath: "attachments/question-stored.png",
-    size: 128
+    size: questionImageBytes.length
   })
 );
 assert(attachment.relativePath === "attachments/question-stored.png", "Attachment metadata failed.");
 assert(
   assertOk(services.attachmentService.listForMistake(mistake.id)).length === 1,
   "Attachment list failed."
+);
+writeFileSync(join(dataDirectoryInfo.attachmentsPath, "note-stored.txt"), Buffer.from("plain text"));
+const textAttachment = assertOk(
+  services.attachmentService.createMetadata({
+    mistakeId: mistake.id,
+    field: "note",
+    originalName: "note.txt",
+    storedName: "note-stored.txt",
+    mimeType: "text/plain",
+    ext: ".txt",
+    relativePath: "attachments/note-stored.txt",
+    size: 10
+  })
+);
+const otherMistakeForAttachment = assertOk(
+  services.mistakeService.create({
+    nodeId: node.id,
+    question: "Other attachment owner",
+    keywordNames: ["other-owner"]
+  })
+).mistake;
+writeFileSync(join(dataDirectoryInfo.attachmentsPath, "other-stored.png"), questionImageBytes);
+const otherMistakeAttachment = assertOk(
+  services.attachmentService.createMetadata({
+    mistakeId: otherMistakeForAttachment.id,
+    field: "question",
+    originalName: "other.png",
+    storedName: "other-stored.png",
+    mimeType: "image/png",
+    ext: ".png",
+    relativePath: "attachments/other-stored.png",
+    size: questionImageBytes.length
+  })
+);
+const extraImageAttachments = Array.from({ length: 6 }, (_item, index) => {
+  const storedName = `extra-${index}.png`;
+  writeFileSync(join(dataDirectoryInfo.attachmentsPath, storedName), questionImageBytes);
+  return assertOk(
+    services.attachmentService.createMetadata({
+      mistakeId: mistake.id,
+      field: "question",
+      originalName: `extra-${index}.png`,
+      storedName,
+      mimeType: "image/png",
+      ext: ".png",
+      relativePath: `attachments/${storedName}`,
+      size: questionImageBytes.length
+    })
+  );
+});
+const largeImageStoredName = "large-ai-image.png";
+writeFileSync(join(dataDirectoryInfo.attachmentsPath, largeImageStoredName), Buffer.alloc(10 * 1024 * 1024 + 1));
+const largeImageAttachment = assertOk(
+  services.attachmentService.createMetadata({
+    mistakeId: mistake.id,
+    field: "question",
+    originalName: "large-ai-image.png",
+    storedName: largeImageStoredName,
+    mimeType: "image/png",
+    ext: ".png",
+    relativePath: `attachments/${largeImageStoredName}`,
+    size: 10 * 1024 * 1024 + 1
+  })
 );
 const invalidGeneralFieldCode = assertFail(
   services.attachmentService.addToMistake(mistake.id, "general" as never, [])
@@ -504,15 +572,107 @@ assert(!firstRequestText.includes("question-stored.png"), "AI prompt must not in
 assert(!firstRequestText.includes("attachments/"), "AI prompt must not include attachment relative paths.");
 assert(!firstRequestText.includes("secret-api-key"), "AI prompt must not include API key.");
 
+assert(
+  assertFail(
+    await services.aiSessionService.sendMessage(createdSessions[0].id, "请分析这张图片。", {
+      imageAttachmentIds: [attachment.id]
+    })
+  ) === "AI_IMAGE_INPUT_UNSUPPORTED",
+  "Image attachment sending should be blocked when the current model is not vision-capable."
+);
+
+assertOk(
+  services.settingsService.updateAiSettings({
+    model: "gpt-4o-mini"
+  })
+);
+const imageCapabilities = assertOk(services.aiSessionService.getProviderCapabilities());
+const openAiImageCapability = imageCapabilities.find((capability) => capability.provider === "openai");
+assert(
+  openAiImageCapability?.supportsImageInput &&
+    openAiImageCapability.imageInputTransport === "base64DataUrl" &&
+    openAiImageCapability.maxImagesPerRequest === 5,
+  "Vision-capable OpenAI model should enable conservative image input capability."
+);
+assert(
+  assertFail(
+    await services.aiSessionService.sendMessage(createdSessions[0].id, "请分析其他题的图片。", {
+      imageAttachmentIds: [otherMistakeAttachment.id]
+    })
+  ) === "AI_IMAGE_ATTACHMENT_FORBIDDEN",
+  "Attachment from another mistake should be blocked."
+);
+assert(
+  assertFail(
+    await services.aiSessionService.sendMessage(createdSessions[0].id, "请分析文本附件。", {
+      imageAttachmentIds: [textAttachment.id]
+    })
+  ) === "AI_IMAGE_ATTACHMENT_UNSUPPORTED_TYPE",
+  "Non-image attachment should be blocked for multimodal image sending."
+);
+assert(
+  assertFail(
+    await services.aiSessionService.sendMessage(createdSessions[0].id, "请分析不存在的图片。", {
+      imageAttachmentIds: ["missing-image-attachment"]
+    })
+  ) === "AI_IMAGE_ATTACHMENT_NOT_FOUND",
+  "Missing attachment id should be blocked."
+);
+assert(
+  assertFail(
+    await services.aiSessionService.sendMessage(createdSessions[0].id, "请分析太多图片。", {
+      imageAttachmentIds: extraImageAttachments.map((item) => item.id)
+    })
+  ) === "AI_IMAGE_ATTACHMENT_TOO_MANY",
+  "Too many image attachments should be blocked."
+);
+assert(
+  assertFail(
+    await services.aiSessionService.sendMessage(createdSessions[0].id, "请分析超大图片。", {
+      imageAttachmentIds: [largeImageAttachment.id]
+    })
+  ) === "AI_IMAGE_ATTACHMENT_TOO_LARGE",
+  "Oversized image attachment should be blocked."
+);
+
+const imageSend = assertOk(
+  await services.aiSessionService.sendMessage(createdSessions[0].id, "请结合图片分析这道题。", {
+    imageAttachmentIds: [attachment.id]
+  })
+);
+assert(imageSend.userMessage.sources.length === 1, "Image send should record one message source.");
+assert(
+  imageSend.userMessage.sources[0]?.sourceKind === "imageAttachment" &&
+    imageSend.userMessage.sources[0]?.attachmentId === attachment.id &&
+    imageSend.userMessage.sources[0]?.originalName === "question.png" &&
+    imageSend.userMessage.sources[0]?.mimeType === "image/png" &&
+    imageSend.userMessage.sources[0]?.field === "question",
+  "Image message source should contain only safe attachment metadata."
+);
+const lastImageRequest = capturedAiRequests[capturedAiRequests.length - 1];
+const imageRequestText = JSON.stringify(lastImageRequest?.messages ?? []);
+assert(imageRequestText.includes("data:image/png;base64,"), "Provider request should include in-memory image data URL.");
+assert(imageRequestText.includes("用户已明确选择"), "Image prompt should include explicit user-selection instruction.");
+assert(!imageRequestText.includes("question-stored.png"), "Image prompt must not include stored attachment names.");
+assert(!imageRequestText.includes("attachments/"), "Image prompt must not include attachment relative paths.");
+assert(!imageRequestText.includes("secret-api-key"), "Image prompt must not include API key.");
+
 const persistedMessages = assertOk(
   services.aiSessionService.getSessionMessages(createdSessions[0].id)
 );
-assert(persistedMessages.length === 2, "AI messages should persist in the session.");
+assert(persistedMessages.length === 4, "AI messages should persist in the session.");
 assert(
   persistedMessages[0]?.seq === 1 && persistedMessages[1]?.seq === 2,
   "AI message seq should increment."
 );
 assertNoSensitiveValues(persistedMessages, "AI message DTO");
+const persistedImageUserMessage = persistedMessages.find((message) =>
+  message.sources.some((source) => source.sourceKind === "imageAttachment")
+);
+assert(persistedImageUserMessage, "Persisted image user message should include image source metadata.");
+const persistedSerialized = JSON.stringify(persistedMessages);
+assert(!persistedSerialized.includes("data:image"), "AI messages must not persist data URLs.");
+assert(!persistedSerialized.includes(questionImageBytes.toString("base64")), "AI messages must not persist base64 image data.");
 
 const longSession = activeSessionsAfterDelete[0] ?? createdSessions[0];
 let longSend = firstSend;
@@ -587,6 +747,7 @@ assertOk(services.mistakeService.softDelete(linkedTargetMistake.id));
 assertOk(services.mistakeService.softDelete(legacyLinkedMistake.id));
 assertOk(services.mistakeService.softDelete(deletedNodeMistake.id));
 assertOk(services.mistakeService.softDelete(childMistake.id));
+assertOk(services.mistakeService.softDelete(otherMistakeForAttachment.id));
 assert(assertOk(services.mistakeService.list()).length === 0, "Mistake soft delete failed.");
 assertOk(services.nodeService.softDelete(childNode.id));
 assertOk(services.nodeService.softDelete(node.id));

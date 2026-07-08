@@ -1,6 +1,6 @@
 import { ipcMain } from "electron";
 import { apiFail, apiOk, ipcChannels } from "@shared/types";
-import type { AiExplainMistakeOptions, AttachmentTextScope } from "@shared/types";
+import type { AiExplainMistakeOptions, AiSendMessageOptions, AttachmentTextScope } from "@shared/types";
 import { getNoopAiStatus } from "../extensions/ai/noopAiProvider";
 import { getNoopOcrStatus } from "../extensions/ocr/noopOcrProvider";
 import { getNoopReviewStatus } from "../extensions/review/noopReviewScheduler";
@@ -39,6 +39,19 @@ const normalizeAiOptions = (options: unknown): AiExplainMistakeOptions => {
       typeof scope === "string" && attachmentTextScopes.has(scope as AttachmentTextScope)
         ? (scope as AttachmentTextScope)
         : "none"
+  };
+};
+
+const normalizeAiSendMessageOptions = (options: unknown): AiSendMessageOptions => {
+  if (!options || typeof options !== "object") {
+    return {};
+  }
+
+  const imageAttachmentIds = (options as { imageAttachmentIds?: unknown }).imageAttachmentIds;
+  return {
+    imageAttachmentIds: Array.isArray(imageAttachmentIds)
+      ? imageAttachmentIds.filter((item): item is string => typeof item === "string" && Boolean(item.trim()))
+      : undefined
   };
 };
 
@@ -117,13 +130,17 @@ export const registerExtensionsIpc = (
 
   ipcMain.handle(
     ipcChannels.extensionAiSessionMessageSend,
-    async (_event, sessionId: string, content: string) => {
+    async (_event, sessionId: string, content: string, options?: unknown) => {
       if (!aiSessionService) {
         return apiFail("AI_NOT_CONFIGURED", "AI is unavailable until the database is ready.");
       }
 
       try {
-        return await aiSessionService.sendMessage(sessionId, content);
+        return await aiSessionService.sendMessage(
+          sessionId,
+          content,
+          normalizeAiSendMessageOptions(options)
+        );
       } catch {
         return apiFail("AI_UNKNOWN_ERROR", "AI session message failed.");
       }

@@ -721,6 +721,81 @@ button:disabled {
   resize: vertical;
 }
 
+.ai-image-attachment-tools {
+  align-items: center;
+  display: flex;
+  flex: 1 1 260px;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ai-selected-images,
+.ai-message-sources ul {
+  display: grid;
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ai-selected-images li,
+.ai-message-sources li {
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  min-width: 0;
+  padding: 6px 8px;
+}
+
+.ai-selected-images span,
+.ai-message-sources span,
+.ai-message-sources small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ai-image-picker {
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  display: grid;
+  gap: 8px;
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.ai-image-option {
+  align-items: flex-start;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  display: flex;
+  gap: 8px;
+  padding: 8px;
+}
+
+.ai-image-option > span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.ai-image-option strong,
+.ai-image-option small {
+  overflow-wrap: anywhere;
+}
+
+.ai-message-sources {
+  border-top: 1px solid var(--border);
+  display: grid;
+  gap: 7px;
+  margin-top: 8px;
+  padding-top: 8px;
+}
+
 .ai-empty-conversation {
   align-items: start;
   display: grid;

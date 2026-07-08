@@ -80,8 +80,8 @@ export const mistVaultApi: MistVaultApi = {
           ipcRenderer.invoke(ipcChannels.extensionAiSessionsDelete, sessionId),
         getSessionMessages: (sessionId) =>
           ipcRenderer.invoke(ipcChannels.extensionAiSessionMessagesList, sessionId),
-        sendMessage: (sessionId, content) =>
-          ipcRenderer.invoke(ipcChannels.extensionAiSessionMessageSend, sessionId, content)
+        sendMessage: (sessionId, content, options) =>
+          ipcRenderer.invoke(ipcChannels.extensionAiSessionMessageSend, sessionId, content, options)
       }
     },
     ocr: {

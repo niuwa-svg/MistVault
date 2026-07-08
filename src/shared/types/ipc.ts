@@ -5,6 +5,7 @@ import type {
   AiExplanationResult,
   AiMessage,
   AiProviderCapability,
+  AiSendMessageOptions,
   AiSendMessageResult,
   AiSession,
   Attachment,
@@ -120,7 +121,8 @@ export type MistVaultApi = {
         getSessionMessages: (sessionId: string) => Promise<ApiResult<AiMessage[]>>;
         sendMessage: (
           sessionId: string,
-          content: string
+          content: string,
+          options?: AiSendMessageOptions
         ) => Promise<ApiResult<AiSendMessageResult>>;
       };
     };
