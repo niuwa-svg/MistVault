@@ -19,6 +19,7 @@ import { AttachmentTextExtractionService } from "./attachmentTextExtraction.serv
 import { DatabaseService } from "./database.service";
 import { MistakeService } from "./mistake.service";
 import { NodeService } from "./node.service";
+import { OcrEngineRegistry, RapidOcrEngine, TesseractOcrEngine } from "./ocr";
 import { OcrRuntimeService } from "./ocrRuntime.service";
 import { ReviewService } from "./review.service";
 import { SettingsService } from "./settings.service";
@@ -92,11 +93,14 @@ export const createCoreServices = (
     options.aiSessionService
   );
   const ocrRuntimeService = new OcrRuntimeService(appPath);
+  const tesseractOcrEngine = new TesseractOcrEngine(ocrRuntimeService, dataDirectoryInfo);
+  const rapidOcrEngine = new RapidOcrEngine(ocrRuntimeService, dataDirectoryInfo);
+  const ocrEngineRegistry = new OcrEngineRegistry(rapidOcrEngine, tesseractOcrEngine);
   const attachmentTextExtractionService = new AttachmentTextExtractionService(
     attachmentsRepository,
     attachmentTextCacheRepository,
     dataDirectoryInfo,
-    ocrRuntimeService
+    ocrEngineRegistry
   );
 
   return {
@@ -128,6 +132,7 @@ export { DatabaseService } from "./database.service";
 export { ExportService } from "../export";
 export { MistakeService } from "./mistake.service";
 export { NodeService } from "./node.service";
+export { OcrEngineRegistry, RapidOcrEngine, TesseractOcrEngine } from "./ocr";
 export { OcrRuntimeService } from "./ocrRuntime.service";
 export { ReviewService } from "./review.service";
 export { SettingsService } from "./settings.service";

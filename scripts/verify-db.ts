@@ -4,6 +4,9 @@ import { join } from "node:path";
 import { initializeDatabase } from "../src/main/db";
 import { listAppliedMigrations, runMigrations } from "../src/main/db/migrations";
 import type { AiProviderAdapter, AiProviderRequest, AiProviderResponse } from "../src/main/extensions/ai/aiProvider";
+import { OcrEngineRegistry } from "../src/main/services/ocr";
+import type { OcrEngine, OcrEngineName, OcrEngineResult } from "../src/main/services/ocr";
+import { sanitizeOcrProcessMessage } from "../src/main/services/ocr/safeOcrError";
 import { createCoreServices } from "../src/main/services";
 import { initializeDataDirectory } from "../src/main/storage/dataDirectory";
 
@@ -37,6 +40,132 @@ const assertNoSensitiveValues = (value: unknown, message: string): void => {
   assert(!/[A-Z]:\\/.test(serialized), `${message}: exposed absolute Windows path.`);
 };
 
+const assertNoSensitiveOcrValues = (value: unknown, message: string): void => {
+  const serialized = JSON.stringify(value);
+  assert(!serialized.includes("15268"), `${message}: exposed system username.`);
+  assert(!serialized.includes("storedName"), `${message}: exposed storedName.`);
+  assert(!serialized.includes("relativePath"), `${message}: exposed relativePath.`);
+  assert(!/[A-Z]:\\/.test(serialized), `${message}: exposed absolute Windows path.`);
+  assert(!/E:\\develop/i.test(serialized), `${message}: exposed PoC path.`);
+  assert(!/\bat\s+[^\s]+/i.test(serialized), `${message}: exposed stack trace.`);
+  assert(!/\bmodels?\\|\bmodels?\//i.test(serialized), `${message}: exposed model path.`);
+};
+
+const ocrSuccess = (engine: OcrEngineName, text: string): OcrEngineResult => ({
+  ok: true,
+  engine,
+  engineVersion: engine === "rapidocr" ? "fake-rapidocr" : "fake-tesseract",
+  elapsedMs: 1,
+  text,
+  blocks: [],
+  warning: null,
+  errorCode: null
+});
+
+const ocrFailure = (
+  engine: OcrEngineName,
+  errorCode = "EXTRACTION_OCR_FAILED",
+  message = "OCR 识别失败。"
+): OcrEngineResult => ({
+  ok: false,
+  engine,
+  engineVersion: null,
+  elapsedMs: 1,
+  text: "",
+  blocks: [],
+  warning: null,
+  errorCode,
+  message
+});
+
+const createFakeOcrEngine = (
+  name: OcrEngineName,
+  available: boolean,
+  results: OcrEngineResult[]
+): { engine: OcrEngine; calls: string[] } => {
+  const calls: string[] = [];
+  let index = 0;
+  return {
+    calls,
+    engine: {
+      name,
+      isAvailable: () => available,
+      recognize: async (input): Promise<OcrEngineResult> => {
+        calls.push(input.absolutePath);
+        const result = results[Math.min(index, results.length - 1)];
+        index += 1;
+        return result ?? ocrFailure(name);
+      }
+    }
+  };
+};
+
+const verifyOcrRegistryFallback = async (): Promise<void> => {
+  const sensitivePath = "C:\\Users\\15268\\MistVault\\attachments\\storedName.png";
+
+  const rapidUnavailable = createFakeOcrEngine("rapidocr", false, [ocrFailure("rapidocr")]);
+  const tesseractAvailable = createFakeOcrEngine("tesseract", true, [
+    ocrSuccess("tesseract", "fallback text")
+  ]);
+  const unavailableRegistry = new OcrEngineRegistry(
+    rapidUnavailable.engine,
+    tesseractAvailable.engine
+  );
+  const unavailableResult = await unavailableRegistry.recognize(
+    { absolutePath: sensitivePath },
+    { timeoutMs: 30_000 }
+  );
+  assert(unavailableResult.ok && unavailableResult.engine === "tesseract", "Unavailable RapidOCR should fallback to Tesseract.");
+  assert(rapidUnavailable.calls.length === 0, "Unavailable RapidOCR should not be called.");
+  assert(tesseractAvailable.calls.length === 1, "Tesseract should be called for unavailable RapidOCR.");
+
+  const rapidSuccess = createFakeOcrEngine("rapidocr", true, [
+    ocrSuccess("rapidocr", "rapid text")
+  ]);
+  const unusedTesseract = createFakeOcrEngine("tesseract", true, [
+    ocrSuccess("tesseract", "unused")
+  ]);
+  const successRegistry = new OcrEngineRegistry(rapidSuccess.engine, unusedTesseract.engine);
+  const successResult = await successRegistry.recognize(
+    { absolutePath: sensitivePath },
+    { timeoutMs: 30_000 }
+  );
+  assert(successResult.ok && successResult.engine === "rapidocr", "Available RapidOCR should be preferred.");
+  assert(unusedTesseract.calls.length === 0, "Tesseract should not be called after RapidOCR succeeds.");
+
+  for (const rapidFailure of [
+    ocrFailure("rapidocr", "EXTRACTION_TIMEOUT", "RapidOCR timed out."),
+    ocrFailure("rapidocr", "EXTRACTION_OCR_FAILED", "RapidOCR helper failed."),
+    ocrFailure("rapidocr", "EXTRACTION_OCR_FAILED", "RapidOCR helper returned invalid JSON.")
+  ]) {
+    const failingRapid = createFakeOcrEngine("rapidocr", true, [rapidFailure]);
+    const fallbackTesseract = createFakeOcrEngine("tesseract", true, [
+      ocrSuccess("tesseract", "fallback after rapid failure")
+    ]);
+    const registry = new OcrEngineRegistry(failingRapid.engine, fallbackTesseract.engine);
+    const result = await registry.recognize({ absolutePath: sensitivePath }, { timeoutMs: 30_000 });
+    assert(result.ok && result.engine === "tesseract", "RapidOCR failure should fallback to Tesseract.");
+  }
+
+  const sensitiveFailureMessage = sanitizeOcrProcessMessage(
+    "C:\\Users\\15268\\secret\\storedName.png relativePath D:\\external\\ocr\\models\\det.onnx at helper.ts:1",
+    "OCR 识别失败。"
+  );
+  const bothFailRapid = createFakeOcrEngine("rapidocr", true, [
+    ocrFailure("rapidocr", "EXTRACTION_OCR_FAILED", "RapidOCR failed.")
+  ]);
+  const bothFailTesseract = createFakeOcrEngine("tesseract", true, [
+    ocrFailure("tesseract", "EXTRACTION_OCR_FAILED", sensitiveFailureMessage)
+  ]);
+  const bothFailRegistry = new OcrEngineRegistry(bothFailRapid.engine, bothFailTesseract.engine);
+  const bothFailResult = await bothFailRegistry.recognize(
+    { absolutePath: sensitivePath },
+    { timeoutMs: 30_000 }
+  );
+  assert(!bothFailResult.ok, "Tesseract failure should be returned when both OCR engines fail.");
+  assertNoSensitiveOcrValues(bothFailResult, "OCR registry failure");
+};
+
 const main = async (): Promise<void> => {
 const basePath = mkdtempSync(join(tmpdir(), "mistvault-db-"));
 const dataDirectoryInfo = initializeDataDirectory(basePath);
@@ -64,6 +193,16 @@ const rerunMigrations = runMigrations(initializedDatabase.adapter);
 const afterMigrations = listAppliedMigrations(initializedDatabase.adapter).join(",");
 assert(rerunMigrations.length === 0, "Migration rerun should not apply new migrations.");
 assert(beforeMigrations === afterMigrations, "Migration rerun changed applied migration state.");
+const attachmentTextCacheColumns = initializedDatabase.adapter
+  .all<{ name: string }>("PRAGMA table_info(attachment_text_cache)")
+  .map((column) => column.name);
+for (const disallowedColumn of ["ocr_engine", "ocr_engine_version", "ocr_confidence", "engine"]) {
+  assert(
+    !attachmentTextCacheColumns.includes(disallowedColumn),
+    `OCR registry should not add ${disallowedColumn} to attachment_text_cache.`
+  );
+}
+await verifyOcrRegistryFallback();
 
 const capturedAiRequests: AiProviderRequest[] = [];
 let fakeAiShouldFail = false;

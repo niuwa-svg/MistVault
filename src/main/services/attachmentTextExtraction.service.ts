@@ -1,7 +1,6 @@
-import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
-import { spawn } from "node:child_process";
-import { extname, join, resolve, sep } from "node:path";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { extname, resolve, sep } from "node:path";
 import JSZip from "jszip";
 import type {
   ApiResult,
@@ -14,7 +13,7 @@ import type {
 } from "@shared/types";
 import type { AttachmentTextCacheRepository, AttachmentsRepository } from "../repositories";
 import { serviceFail, serviceOk } from "./serviceResult";
-import type { OcrRuntimeService } from "./ocrRuntime.service";
+import type { OcrEngineRegistry } from "./ocr";
 
 type ResolvedAttachment = {
   attachment: Attachment;
@@ -135,7 +134,7 @@ export class AttachmentTextExtractionService {
     private readonly attachmentsRepository: AttachmentsRepository,
     private readonly textCacheRepository: AttachmentTextCacheRepository,
     private readonly dataDirectoryInfo: DataDirectoryInfo,
-    private readonly ocrRuntimeService: OcrRuntimeService
+    private readonly ocrEngineRegistry: OcrEngineRegistry
   ) {}
 
   getStatus(attachmentId: string): ApiResult<AttachmentTextStatusResult> {
@@ -568,109 +567,24 @@ export class AttachmentTextExtractionService {
       .trim();
   }
 
-  private extractImageOcr(absolutePath: string): Promise<string> {
-    const runtime = this.ocrRuntimeService.getStatus();
-    if (!runtime.tesseractExists) {
-      throw new ExtractionFailure(
-        "EXTRACTION_OCR_RUNTIME_MISSING",
-        extractionMessages.EXTRACTION_OCR_RUNTIME_MISSING
-      );
-    }
-    if (!runtime.chiSimExists || !runtime.engExists) {
-      throw new ExtractionFailure(
-        "EXTRACTION_OCR_LANGUAGE_MISSING",
-        extractionMessages.EXTRACTION_OCR_LANGUAGE_MISSING
-      );
+  private async extractImageOcr(absolutePath: string): Promise<string> {
+    const result = await this.ocrEngineRegistry.recognize(
+      { absolutePath },
+      { timeoutMs: ocrTimeoutMs }
+    );
+    if (result.ok) {
+      return result.text;
     }
 
-    const tmpRoot = join(this.dataDirectoryInfo.path, "tmp", "extraction");
-    const tmpDirectory = join(tmpRoot, `ocr-${randomUUID()}`);
-    mkdirSync(tmpDirectory, { recursive: true });
-
-    const cleanupTmpDirectory = () => {
-      try {
-        rmSync(tmpDirectory, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
-      } catch {
-        // Cleanup failure must not replace the extraction result or expose local paths.
-      }
-    };
-
-    return new Promise((resolveText, reject) => {
-      let child: ReturnType<typeof spawn>;
-      try {
-        child = spawn(
-          join(runtime.runtimePath, "tesseract.exe"),
-          [absolutePath, "stdout", "-l", "chi_sim+eng", "--tessdata-dir", runtime.tessdataPath],
-          {
-            cwd: runtime.runtimePath,
-            env: {
-              SystemRoot: process.env.SystemRoot ?? "C:\\Windows",
-              WINDIR: process.env.WINDIR ?? "C:\\Windows",
-              TEMP: tmpDirectory,
-              TMP: tmpDirectory
-            },
-            timeout: ocrTimeoutMs,
-            windowsHide: true
-          }
-        );
-      } catch {
-        cleanupTmpDirectory();
-        reject(
-          new ExtractionFailure("EXTRACTION_OCR_FAILED", extractionMessages.EXTRACTION_OCR_FAILED)
-        );
-        return;
-      }
-
-      let stdout = "";
-      let stderr = "";
-      child.stdout.setEncoding("utf8");
-      child.stderr.setEncoding("utf8");
-      child.stdout.on("data", (chunk) => {
-        stdout += chunk;
-      });
-      child.stderr.on("data", (chunk) => {
-        stderr += chunk;
-      });
-      child.on("error", () => {
-        cleanupTmpDirectory();
-        reject(
-          new ExtractionFailure("EXTRACTION_OCR_FAILED", extractionMessages.EXTRACTION_OCR_FAILED)
-        );
-      });
-      child.on("close", (code, signal) => {
-        cleanupTmpDirectory();
-        if (signal) {
-          reject(new ExtractionFailure("EXTRACTION_TIMEOUT", extractionMessages.EXTRACTION_TIMEOUT));
-          return;
-        }
-        if (code !== 0) {
-          reject(
-            new ExtractionFailure(
-              "EXTRACTION_OCR_FAILED",
-              this.sanitizeProcessError(stderr) || extractionMessages.EXTRACTION_OCR_FAILED
-            )
-          );
-          return;
-        }
-        resolveText(stdout);
-      });
-    });
+    const code = result.errorCode ?? "EXTRACTION_OCR_FAILED";
+    throw new ExtractionFailure(
+      code,
+      extractionMessages[code] ?? extractionMessages.EXTRACTION_OCR_FAILED
+    );
   }
 
   private hashFile(absolutePath: string): string {
     return createHash("sha256").update(readFileSync(absolutePath)).digest("hex");
-  }
-
-  private sanitizeProcessError(value: string): string {
-    const normalized = value.replace(/\s+/g, " ").trim();
-    if (!normalized) {
-      return "";
-    }
-
-    return normalized
-      .replace(/[A-Z]:\\[^\s]+/gi, "<path>")
-      .replace(/\/[^\s]+/g, "<path>")
-      .slice(0, 300);
   }
 
   private toExtractionFailure(error: unknown): { ok: false; code: string; message: string } {

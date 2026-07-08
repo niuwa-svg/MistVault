@@ -12,6 +12,8 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { AttachmentTextExtractionService } from "../src/main/services/attachmentTextExtraction.service";
+import { OcrEngineRegistry, TesseractOcrEngine } from "../src/main/services/ocr";
+import type { OcrEngine, OcrEngineResult } from "../src/main/services/ocr";
 import type {
   ApiResult,
   Attachment,
@@ -161,25 +163,49 @@ const assertFail = (result: ApiResult<unknown>, expectedCode: string): void => {
 const attachmentsRepository = new MemoryAttachmentsRepository();
 const textCacheRepository = new MemoryAttachmentTextCacheRepository();
 
+const unavailableRapidOcrEngine: OcrEngine = {
+  name: "rapidocr",
+  isAvailable: () => false,
+  recognize: async (_input, _options): Promise<OcrEngineResult> => ({
+    ok: false,
+    engine: "rapidocr",
+    engineVersion: null,
+    elapsedMs: 0,
+    text: "",
+    blocks: [],
+    warning: null,
+    errorCode: "EXTRACTION_OCR_RUNTIME_MISSING",
+    message: "RapidOCR is unavailable in Stage 1A verification."
+  })
+};
+
 const createService = (runtimeStatus?: {
   tesseractExists: boolean;
   chiSimExists: boolean;
   engExists: boolean;
-}): AttachmentTextExtractionService =>
-  new AttachmentTextExtractionService(
-    attachmentsRepository as never,
-    textCacheRepository as never,
-    dataDirectoryInfo,
+}): AttachmentTextExtractionService => {
+  const tesseractEngine = new TesseractOcrEngine(
     {
       getStatus: () => ({
         runtimePath,
         tessdataPath,
         tesseractExists: runtimeStatus?.tesseractExists ?? existsSync(join(runtimePath, "tesseract.exe")),
         chiSimExists: runtimeStatus?.chiSimExists ?? existsSync(join(tessdataPath, "chi_sim.traineddata")),
-        engExists: runtimeStatus?.engExists ?? existsSync(join(tessdataPath, "eng.traineddata"))
+        engExists: runtimeStatus?.engExists ?? existsSync(join(tessdataPath, "eng.traineddata")),
+        engineVersion: null
       })
-    } as never
+    } as never,
+    dataDirectoryInfo
   );
+  const registry = new OcrEngineRegistry(unavailableRapidOcrEngine, tesseractEngine);
+
+  return new AttachmentTextExtractionService(
+    attachmentsRepository as never,
+    textCacheRepository as never,
+    dataDirectoryInfo,
+    registry
+  );
+};
 
 const createAttachmentFile = (
   originalName: string,

@@ -98,6 +98,19 @@ class MemoryAttachmentTextCacheRepository {
 
 const attachmentsRepository = new MemoryAttachmentsRepository();
 const textCacheRepository = new MemoryAttachmentTextCacheRepository();
+const disabledOcrRegistry = {
+  recognize: async () => ({
+    ok: false,
+    engine: "tesseract",
+    engineVersion: null,
+    elapsedMs: 0,
+    text: "",
+    blocks: [],
+    warning: null,
+    errorCode: "EXTRACTION_OCR_RUNTIME_MISSING",
+    message: "OCR is disabled in Stage 1B verification."
+  })
+};
 
 const assert = (condition: unknown, message: string): void => {
   if (!condition) {
@@ -136,15 +149,7 @@ const createService = (): AttachmentTextExtractionService =>
     attachmentsRepository as never,
     textCacheRepository as never,
     dataDirectoryInfo,
-    {
-      getStatus: () => ({
-        runtimePath: join(root, "resources", "ocr", "tesseract"),
-        tessdataPath: join(root, "resources", "ocr", "tesseract", "tessdata"),
-        tesseractExists: false,
-        chiSimExists: false,
-        engExists: false
-      })
-    } as never
+    disabledOcrRegistry as never
   );
 
 const createAttachmentFile = (
