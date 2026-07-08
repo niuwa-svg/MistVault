@@ -1492,8 +1492,8 @@ export const MistakeDetailPanel = ({
     }
 
     const readinessMessage = getAiReadinessMessage();
-    if (readinessMessage) {
-      setAiError(readinessMessage);
+    if (readinessMessage || !aiStatus?.ready) {
+      setAiError(readinessMessage ?? "AI 状态加载中，请稍后再试。");
       return;
     }
 
@@ -1530,11 +1530,13 @@ export const MistakeDetailPanel = ({
       }
     }
 
+    const requestMistakeId = mistake?.id ?? null;
+    const requestSessionId = activeAiSessionId;
     const now = new Date().toISOString();
     const nextSeq = aiMessages.reduce((max, message) => Math.max(max, message.seq), 0) + 1;
     const optimisticUserMessage: AiMessage = {
       id: `local-user-${now}`,
-      sessionId: activeAiSessionId,
+      sessionId: requestSessionId,
       seq: nextSeq,
       role: "user",
       content,
@@ -1560,7 +1562,7 @@ export const MistakeDetailPanel = ({
     };
     const optimisticAssistantMessage: AiMessage = {
       id: `local-assistant-${now}`,
-      sessionId: activeAiSessionId,
+      sessionId: requestSessionId,
       seq: nextSeq + 1,
       role: "assistant",
       content: "",
@@ -1582,26 +1584,31 @@ export const MistakeDetailPanel = ({
     setAiInput("");
     setAiMessages((current) => [...current, optimisticUserMessage, optimisticAssistantMessage]);
 
-    const result = await mistVaultApi.extensions.ai.sessions.sendMessage(
-      activeAiSessionId,
-      content,
-      selectedImageIds.length > 0 ? { imageAttachmentIds: selectedImageIds } : undefined
-    );
-    if (currentMistakeIdRef.current !== (mistake?.id ?? null)) {
-      return;
-    }
+    try {
+      const result = await mistVaultApi.extensions.ai.sessions.sendMessage(
+        requestSessionId,
+        content,
+        selectedImageIds.length > 0 ? { imageAttachmentIds: selectedImageIds } : undefined
+      );
+      if (currentMistakeIdRef.current !== requestMistakeId) {
+        return;
+      }
 
-    if (result.ok) {
-      setAiContextWarning(result.data.contextWarning);
-      setSelectedAiImageAttachmentIds([]);
-      setAiImagePickerOpen(false);
-    } else {
-      setAiError(aiErrorMessage(result.error.code, result.error.message));
-    }
+      if (result.ok) {
+        setAiContextWarning(result.data.contextWarning);
+        setSelectedAiImageAttachmentIds([]);
+        setAiImagePickerOpen(false);
+      } else {
+        setAiError(aiErrorMessage(result.error.code, result.error.message));
+      }
 
-    await loadAiMessagesForSession(activeAiSessionId);
-    await refreshAiSessions(activeAiSessionId);
-    setAiSending(false);
+      await loadAiMessagesForSession(requestSessionId);
+      await refreshAiSessions(requestSessionId);
+    } finally {
+      if (currentMistakeIdRef.current === requestMistakeId) {
+        setAiSending(false);
+      }
+    }
   };
 
   const copyAiMessage = async (message: AiMessage) => {
@@ -1791,7 +1798,7 @@ export const MistakeDetailPanel = ({
                         }}
                         maxLength={maxAiUserMessageChars}
                         placeholder="输入你想继续追问的内容"
-                        disabled={aiSending || !aiStatus?.ready}
+                        disabled={aiSending || !activeSession}
                       />
                     </label>
                     <div className="ai-composer-actions">
