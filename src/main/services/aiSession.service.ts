@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { resolve, sep } from "node:path";
 import type {
   AiContextWarning,
@@ -288,7 +288,8 @@ const selectHistoryMessages = (messages: AiMessage[]): SelectedHistory => {
 const buildSessionChatMessages = (
   mistake: Mistake,
   nodePath: string[],
-  historyMessages: AiChatMessage[]
+  historyMessages: AiChatMessage[],
+  hasImageInput: boolean
 ): AiChatMessage[] => {
   const keywords = mistake.keywords.map((keyword) => keyword.name).join("、") || "未提供";
   const system = [
@@ -306,7 +307,13 @@ const buildSessionChatMessages = (
     "风格适合学生复习，步骤清晰，聚焦当前题目。",
     "数学题和 408 / 计算机专业课题目要分步讲解，明确区分题目已给信息、补充背景和推导结论。",
     "回答要克制，不要额外出类似练习题，不要泛泛展开无关知识点。"
-  ].join("\n");
+  ].concat(
+    hasImageInput
+      ? "Image-input mode: attached image parts in this request are the only images the model may analyze; do not claim to see any unsent attachment."
+      : "Text-only mode: no image parts are provided; do not claim to see images or attachments."
+  )
+    .filter((line) => !hasImageInput || !(line.includes("PDF") && line.includes("Word")))
+    .join("\n");
 
   const context = [
     "当前错题上下文：",
@@ -559,7 +566,8 @@ export class AiSessionService {
     const providerMessages = buildSessionChatMessages(
       mistakeResult.data,
       nodePathResult.ok ? nodePathResult.data.map((node) => node.name) : [],
-      selectedHistory.messages
+      selectedHistory.messages,
+      preparedImages.data.length > 0
     );
     const requestMessages = attachImagesToLastUserMessage(
       providerMessages,
@@ -678,6 +686,12 @@ export class AiSessionService {
 
     const acceptedMimeTypes = new Set(capability.acceptedMimeTypes);
     const prepared: PreparedImageAttachment[] = [];
+    let realAttachmentsPath: string;
+    try {
+      realAttachmentsPath = realpathSync(this.dataDirectoryInfo.attachmentsPath);
+    } catch {
+      return fail("AI_IMAGE_ATTACHMENT_PATH_INVALID");
+    }
 
     for (const attachmentId of attachmentIds) {
       const attachment = this.attachmentsRepository.getById(attachmentId);
@@ -708,9 +722,20 @@ export class AiSessionService {
         return fail("AI_IMAGE_ATTACHMENT_FILE_MISSING");
       }
 
+      let realAbsolutePath: string;
+      try {
+        realAbsolutePath = realpathSync(absolutePath);
+      } catch {
+        return fail("AI_IMAGE_ATTACHMENT_FILE_MISSING");
+      }
+
+      if (!isWithinDirectory(realAbsolutePath, realAttachmentsPath)) {
+        return fail("AI_IMAGE_ATTACHMENT_PATH_INVALID");
+      }
+
       let size = attachment.size;
       try {
-        const stats = statSync(absolutePath);
+        const stats = statSync(realAbsolutePath);
         if (!stats.isFile()) {
           return fail("AI_IMAGE_ATTACHMENT_FILE_MISSING");
         }
@@ -724,7 +749,7 @@ export class AiSessionService {
       }
 
       try {
-        const file = readFileSync(absolutePath);
+        const file = readFileSync(realAbsolutePath);
         prepared.push({
           attachment,
           mimeType,

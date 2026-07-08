@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initializeDatabase } from "../src/main/db";
@@ -87,7 +87,10 @@ const services = createCoreServices(
     aiSessionService: {
       providerAdapters: {
         openai: fakeAiProvider,
-        deepseek: fakeAiProvider
+        deepseek: fakeAiProvider,
+        qwen: fakeAiProvider,
+        kimi: fakeAiProvider,
+        doubao: fakeAiProvider
       }
     }
   }
@@ -375,6 +378,39 @@ const largeImageAttachment = assertOk(
     size: 10 * 1024 * 1024 + 1
   })
 );
+const realpathEscapeAttachmentId = "realpath-escape-image";
+let realpathEscapeAttachmentCreated = false;
+try {
+  const outsideImagePath = join(basePath, "outside-image.png");
+  const linkName = "realpath-escape-link.png";
+  writeFileSync(outsideImagePath, questionImageBytes);
+  symlinkSync(outsideImagePath, join(dataDirectoryInfo.attachmentsPath, linkName), "file");
+  initializedDatabase.adapter.run(
+    `
+      INSERT INTO attachments (
+        id, mistake_id, field, original_name, stored_name, mime_type, ext,
+        relative_path, size, hash, created_at, deleted_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+    `,
+    [
+      realpathEscapeAttachmentId,
+      mistake.id,
+      "question",
+      "realpath-escape.png",
+      linkName,
+      "image/png",
+      ".png",
+      `attachments/${linkName}`,
+      questionImageBytes.length,
+      null,
+      new Date().toISOString()
+    ]
+  );
+  realpathEscapeAttachmentCreated = true;
+} catch {
+  realpathEscapeAttachmentCreated = false;
+}
 const invalidGeneralFieldCode = assertFail(
   services.attachmentService.addToMistake(mistake.id, "general" as never, [])
 );
@@ -518,7 +554,8 @@ assert(
     (capability) =>
       capability.provider === "openai" &&
       capability.supportsTextChat &&
-      !capability.supportsImageInput
+      !capability.supportsImageInput &&
+      capability.imageInputStatus === "textOnly"
   ),
   "AI provider capabilities should expose text chat and keep image input disabled."
 );
@@ -528,9 +565,91 @@ assert(
       capability.provider === "deepseek" &&
       capability.supportsTextChat &&
       !capability.supportsImageInput &&
+      capability.imageInputStatus === "textOnly" &&
       capability.imageInputTransport === null
   ),
   "DeepSeek should be exposed as text-only."
+);
+const getCurrentCapability = (provider: string) =>
+  assertOk(services.aiSessionService.getProviderCapabilities()).find(
+    (capability) => capability.provider === provider
+  );
+const assertImageEnabled = (provider: "openai" | "qwen" | "kimi", model: string): void => {
+  assertOk(
+    services.settingsService.updateAiSettings({
+      provider,
+      model
+    })
+  );
+  const capability = getCurrentCapability(provider);
+  assert(
+    capability?.supportsTextChat &&
+      capability.supportsImageInput &&
+      capability.imageInputStatus === "enabled" &&
+      capability.imageInputTransport === "base64DataUrl",
+    `${provider} ${model} should enable image input.`
+  );
+};
+[
+  "gpt-5.5",
+  "gpt-5.5-preview",
+  "gpt-5.4",
+  "gpt-5.4-mini",
+  "gpt-5-mini",
+  "gpt-4o-mini",
+  "gpt-4.1-mini"
+].forEach((model) => assertImageEnabled("openai", model));
+["kimi-k2.6", "kimi-k2.7-code", "kimi-k2.7-code-highspeed"].forEach((model) =>
+  assertImageEnabled("kimi", model)
+);
+["qwen3.7-plus", "qwen3.5-omni-plus"].forEach((model) => assertImageEnabled("qwen", model));
+assertOk(
+  services.settingsService.updateAiSettings({
+    provider: "qwen",
+    model: "qwen-plus"
+  })
+);
+const qwenTextCapability = getCurrentCapability("qwen");
+assert(
+  qwenTextCapability?.supportsTextChat &&
+    !qwenTextCapability.supportsImageInput &&
+    qwenTextCapability.imageInputStatus === "notVerified" &&
+    qwenTextCapability.notes?.includes("Qwen/百炼已有图像与视频理解模型"),
+  "Qwen non-allowlisted model should stay notVerified without denying multimodal availability."
+);
+assertOk(
+  services.settingsService.updateAiSettings({
+    provider: "doubao",
+    model: "doubao-seed-vision"
+  })
+);
+const doubaoCapability = getCurrentCapability("doubao");
+assert(
+  doubaoCapability?.supportsTextChat &&
+    !doubaoCapability.supportsImageInput &&
+    doubaoCapability.imageInputStatus === "notVerified" &&
+    doubaoCapability.notes?.includes("火山方舟/豆包已有图片理解与视觉理解能力"),
+  "Doubao should remain notVerified until image_url/base64DataUrl compatibility is confirmed."
+);
+assertOk(
+  services.settingsService.updateAiSettings({
+    provider: "deepseek",
+    model: "deepseek-v4-pro"
+  })
+);
+const deepseekTextCapability = getCurrentCapability("deepseek");
+assert(
+  deepseekTextCapability?.supportsTextChat &&
+    !deepseekTextCapability.supportsImageInput &&
+    deepseekTextCapability.imageInputStatus === "textOnly" &&
+    deepseekTextCapability.notes?.includes("按 text-only 处理"),
+  "DeepSeek should stay text-only."
+);
+assertOk(
+  services.settingsService.updateAiSettings({
+    provider: "openai",
+    model: "example-model"
+  })
 );
 
 const createdSessions = Array.from({ length: 5 }, () =>
@@ -615,6 +734,10 @@ assert(
 const textOnlyRequestText = JSON.stringify(capturedAiRequests[capturedAiRequests.length - 1]?.messages ?? []);
 assert(!textOnlyRequestText.includes("data:image"), "Text-only request must not include image data URLs.");
 assert(!textOnlyRequestText.includes("image_url"), "Text-only request must not include image_url parts.");
+assert(
+  textOnlyRequestText.includes("Text-only mode: no image parts are provided"),
+  "Text-only prompt should keep the no-image instruction."
+);
 
 assertOk(
   services.settingsService.updateAiSettings({
@@ -657,8 +780,70 @@ assertOk(
 const qwenCapabilities = assertOk(services.aiSessionService.getProviderCapabilities());
 const qwenCapability = qwenCapabilities.find((capability) => capability.provider === "qwen");
 assert(
-  qwenCapability?.supportsTextChat && !qwenCapability.supportsImageInput,
-  "Qwen should stay text-only until official docs and exact model support are confirmed."
+  qwenCapability?.supportsTextChat &&
+    !qwenCapability.supportsImageInput &&
+    qwenCapability.imageInputStatus === "notVerified" &&
+    qwenCapability.notes?.includes("Qwen/百炼已有图像与视频理解模型"),
+  "Qwen non-allowlisted model should stay notVerified without denying multimodal availability."
+);
+const beforeQwenNotVerifiedImageCount = capturedAiRequests.length;
+assert(
+  assertFail(
+    await services.aiSessionService.sendMessage(createdSessions[4].id, "qwen not verified image blocked", {
+      imageAttachmentIds: [attachment.id]
+    })
+  ) === "AI_IMAGE_INPUT_UNSUPPORTED",
+  "Qwen non-allowlisted image input should be blocked."
+);
+assert(
+  capturedAiRequests.length === beforeQwenNotVerifiedImageCount,
+  "Qwen non-allowlisted image input must not reach the provider."
+);
+assertOk(
+  services.settingsService.updateAiSettings({
+    provider: "kimi",
+    model: "kimi-k2.6"
+  })
+);
+const kimiImageSend = assertOk(
+  await services.aiSessionService.sendMessage(createdSessions[4].id, "kimi enabled image", {
+    imageAttachmentIds: [attachment.id]
+  })
+);
+assert(kimiImageSend.userMessage.sources.length === 1, "Kimi enabled image send should record safe metadata.");
+const kimiImageRequestText = JSON.stringify(capturedAiRequests[capturedAiRequests.length - 1]?.messages ?? []);
+assert(kimiImageRequestText.includes("image_url"), "Kimi enabled image request should include image_url.");
+assert(kimiImageRequestText.includes("data:image/png;base64,"), "Kimi enabled image request should include data URL.");
+assert(
+  kimiImageRequestText.includes("Image-input mode: attached image parts in this request are the only images"),
+  "Image-input prompt should allow analysis only for images sent in this request."
+);
+assert(
+  !kimiImageRequestText.includes("Text-only mode: no image parts are provided"),
+  "Image-input prompt should not keep the text-only no-image instruction."
+);
+assertOk(
+  services.settingsService.updateAiSettings({
+    provider: "qwen",
+    model: "qwen3.7-plus"
+  })
+);
+const qwenImageSend = assertOk(
+  await services.aiSessionService.sendMessage(createdSessions[4].id, "qwen enabled image", {
+    imageAttachmentIds: [attachment.id]
+  })
+);
+assert(qwenImageSend.userMessage.sources.length === 1, "Qwen enabled image send should record safe metadata.");
+const qwenImageRequestText = JSON.stringify(capturedAiRequests[capturedAiRequests.length - 1]?.messages ?? []);
+assert(qwenImageRequestText.includes("image_url"), "Qwen enabled image request should include image_url.");
+assert(qwenImageRequestText.includes("data:image/png;base64,"), "Qwen enabled image request should include data URL.");
+assert(
+  qwenImageRequestText.includes("Image-input mode: attached image parts in this request are the only images"),
+  "Image-input prompt should allow analysis only for images sent in this request."
+);
+assert(
+  !qwenImageRequestText.includes("Text-only mode: no image parts are provided"),
+  "Image-input prompt should not conflict with text-only prompt."
 );
 assertOk(
   services.settingsService.updateAiSettings({
@@ -720,6 +905,16 @@ assert(
   ) === "AI_IMAGE_ATTACHMENT_TOO_LARGE",
   "Oversized image attachment should be blocked."
 );
+if (realpathEscapeAttachmentCreated) {
+  assert(
+    assertFail(
+      await services.aiSessionService.sendMessage(createdSessions[0].id, "realpath escape blocked", {
+        imageAttachmentIds: [realpathEscapeAttachmentId]
+      })
+    ) === "AI_IMAGE_ATTACHMENT_PATH_INVALID",
+    "Image attachment realpath escaping the attachments directory should be blocked with a safe error."
+  );
+}
 
 const imageSend = assertOk(
   await services.aiSessionService.sendMessage(createdSessions[0].id, "请结合图片分析这道题。", {

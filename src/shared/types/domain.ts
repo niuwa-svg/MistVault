@@ -391,10 +391,13 @@ export type AiSendMessageOptions = {
 
 export type AiImageInputTransport = "base64DataUrl";
 
+export type AiImageInputStatus = "enabled" | "textOnly" | "notVerified" | "unsupportedProvider";
+
 export type AiProviderCapability = {
   provider: AiProvider;
   supportsTextChat: boolean;
   supportsImageInput: boolean;
+  imageInputStatus?: AiImageInputStatus;
   acceptedMimeTypes: string[];
   maxImageBytes: number | null;
   maxImagesPerRequest: number;
