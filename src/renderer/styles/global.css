@@ -700,10 +700,14 @@ button:disabled {
 }
 
 .ai-message-composer {
+  background: var(--surface-raised);
   border-top: 1px solid var(--border);
   display: grid;
   gap: 8px;
   padding-top: 12px;
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
 }
 
 .ai-message-composer label {
@@ -718,6 +722,7 @@ button:disabled {
 
 .ai-message-composer textarea {
   min-height: 86px;
+  pointer-events: auto;
   resize: vertical;
 }
 

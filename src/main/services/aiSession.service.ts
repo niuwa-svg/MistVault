@@ -247,6 +247,15 @@ const normalizeImageExt = (attachment: Attachment): string => {
   return rawExt && !rawExt.startsWith(".") ? `.${rawExt}` : rawExt;
 };
 
+const nextSessionTitleNumber = (sessions: AiSession[]): number =>
+  Math.max(
+    0,
+    ...sessions.map((session) => {
+      const match = /^AI 对话\s+(\d+)$/.exec(session.title.trim());
+      return match ? Number(match[1]) || 0 : 0;
+    })
+  ) + 1;
+
 const detectImageMimeType = (attachment: Attachment): string => {
   const normalizedMimeType = attachment.mimeType.trim().toLowerCase();
   if (supportedImageMimeTypes.has(normalizedMimeType)) {
@@ -484,11 +493,14 @@ export class AiSessionService {
         }
 
         const now = new Date().toISOString();
+        const titleNumber = nextSessionTitleNumber(
+          this.aiSessionRepository.listActiveSessionsByMistake(mistakeId)
+        );
         return {
           session: this.aiSessionRepository.createSession({
             id: randomUUID(),
             mistakeId,
-            title: `AI 对话 ${activeCount + 1}`,
+            title: `AI 对话 ${titleNumber}`,
             createdAt: now
           })
         };

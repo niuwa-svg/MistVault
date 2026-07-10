@@ -839,6 +839,11 @@ assert(
   assertOk(services.mistakeService.get(mistake.id)).id === mistake.id,
   "Deleting an AI session should not delete the mistake."
 );
+const replacementSession = assertOk(services.aiSessionService.createSession(mistake.id));
+assert(
+  replacementSession.title === "AI 对话 6",
+  "Creating a session after deleting an earlier one should use a new title number."
+);
 assert(
   assertFail(services.aiSessionService.getSessionMessages(createdSessions[1].id)) ===
     "AI_SESSION_MESSAGES_FAILED",
