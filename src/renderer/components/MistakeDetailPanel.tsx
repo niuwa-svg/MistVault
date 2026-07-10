@@ -1,4 +1,5 @@
 ﻿import { useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import type {
   AiContextWarning,
   AiExtensionStatus,
@@ -134,6 +135,58 @@ const aiImageAttachmentExts = new Set(["jpg", "jpeg", "png", "webp", "bmp"]);
 const aiImageAttachmentMimeTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/bmp"]);
 const maxAiSessionsPerMistake = 5;
 const maxAiUserMessageChars = 8000;
+
+type AiComposerProps = {
+  sessionId: string;
+  sending: boolean;
+  canAttemptSend: boolean;
+  onSend: (content: string) => void;
+  children: ReactNode;
+};
+
+const AiComposer = ({ sessionId, sending, canAttemptSend, onSend, children }: AiComposerProps) => {
+  const [draft, setDraft] = useState("");
+
+  useEffect(() => {
+    setDraft("");
+  }, [sessionId]);
+
+  const canSend =
+    canAttemptSend && draft.trim().length > 0 && draft.trim().length <= maxAiUserMessageChars;
+
+  return (
+    <form
+      className="ai-message-composer"
+      onSubmit={(event) => {
+        event.preventDefault();
+        const content = draft.trim();
+        if (!content || !canSend) {
+          return;
+        }
+        setDraft("");
+        onSend(content);
+      }}
+    >
+      <label>
+        <span>继续追问</span>
+        <textarea
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          maxLength={maxAiUserMessageChars}
+          placeholder="输入你想继续追问的内容"
+          disabled={!sessionId}
+        />
+      </label>
+      <div className="ai-composer-actions">
+        <span>{draft.length}/{maxAiUserMessageChars}</span>
+        {children}
+        <button type="submit" disabled={!canSend}>
+          {sending ? "发送中..." : "发送"}
+        </button>
+      </div>
+    </form>
+  );
+};
 
 const contextWarningMessages: Record<AiContextWarning, string | null> = {
   none: null,
@@ -696,7 +749,6 @@ export const MistakeDetailPanel = ({
   const [aiSessions, setAiSessions] = useState<AiSession[]>([]);
   const [activeAiSessionId, setActiveAiSessionId] = useState<string | null>(null);
   const [aiMessages, setAiMessages] = useState<AiMessage[]>([]);
-  const [aiInput, setAiInput] = useState("");
   const [selectedAiImageAttachmentIds, setSelectedAiImageAttachmentIds] = useState<string[]>([]);
   const [aiImagePickerOpen, setAiImagePickerOpen] = useState(false);
   const [selectedAiAttachmentTextIds, setSelectedAiAttachmentTextIds] = useState<string[]>([]);
@@ -712,14 +764,6 @@ export const MistakeDetailPanel = ({
   const [aiSending, setAiSending] = useState(false);
   const aiRequestSeq = useRef(0);
   const currentMistakeIdRef = useRef<string | null>(null);
-  const aiComposerRef = useRef<HTMLTextAreaElement | null>(null);
-
-  const resetAiInput = (value = "") => {
-    setAiInput(value);
-    if (aiComposerRef.current) {
-      aiComposerRef.current.value = value;
-    }
-  };
 
   const editing = mode === "create" || mode === "edit";
   const groupedAttachments = useMemo(() => {
@@ -803,7 +847,6 @@ export const MistakeDetailPanel = ({
     setAiSessions([]);
     setActiveAiSessionId(null);
     setAiMessages([]);
-    resetAiInput();
     setSelectedAiImageAttachmentIds([]);
     setAiImagePickerOpen(false);
     setSelectedAiAttachmentTextIds([]);
@@ -1328,7 +1371,6 @@ export const MistakeDetailPanel = ({
 
     setActiveAiSessionId(sessionId);
     setAiMessages([]);
-    resetAiInput();
     setSelectedAiImageAttachmentIds([]);
     setAiImagePickerOpen(false);
     setAiError(null);
@@ -1515,8 +1557,7 @@ export const MistakeDetailPanel = ({
     );
   };
 
-  const sendAiMessage = async () => {
-    const content = (aiComposerRef.current?.value ?? aiInput).trim();
+  const sendAiMessage = async (content: string) => {
     if (!activeAiSessionId || aiSending) {
       return;
     }
@@ -1636,7 +1677,6 @@ export const MistakeDetailPanel = ({
     setAiError(null);
     setAiCopyMessage(null);
     setAiContextWarning("none");
-    resetAiInput();
     setAiMessages((current) => [...current, optimisticUserMessage, optimisticAssistantMessage]);
 
     try {
@@ -1733,13 +1773,11 @@ export const MistakeDetailPanel = ({
       Boolean(aiStatus?.ready) &&
       Boolean(currentAiImageCapability) &&
       !currentAiImageCapability?.supportsImageInput;
-    const canSend =
+    const canAttemptSend =
       Boolean(activeSession) &&
       Boolean(aiStatus?.ready) &&
       !aiSending &&
-      !aiMessagesLoading &&
-      aiInput.trim().length > 0 &&
-      aiInput.trim().length <= maxAiUserMessageChars;
+      !aiMessagesLoading;
     const canCreate = !aiSessionsLoading && !aiSessionBusy && !sessionLimitReached;
 
     return (
@@ -1852,35 +1890,13 @@ export const MistakeDetailPanel = ({
                       );
                     })}
                   </div>
-                  <form
-                    className="ai-message-composer"
-                    onSubmit={(event) => {
-                      event.preventDefault();
-                      void sendAiMessage();
-                    }}
+                  <AiComposer
+                    sessionId={activeSession.id}
+                    sending={aiSending}
+                    canAttemptSend={canAttemptSend}
+                    onSend={(content) => void sendAiMessage(content)}
                   >
-                    <label>
-                      <span>继续追问</span>
-                      <textarea
-                        ref={aiComposerRef}
-                        defaultValue={aiInput}
-                        onInput={(event) => {
-                          setAiInput(event.target.value);
-                          setAiError(null);
-                        }}
-                        onPointerDown={() => {
-                          window.requestAnimationFrame(() => aiComposerRef.current?.focus());
-                        }}
-                        maxLength={maxAiUserMessageChars}
-                        placeholder="输入你想继续追问的内容"
-                        disabled={!activeSession}
-                      />
-                    </label>
-                    <div className="ai-composer-actions">
-                      <span className={aiInput.length > maxAiUserMessageChars ? "state-error" : ""}>
-                        {aiInput.length}/{maxAiUserMessageChars}
-                      </span>
-                      <div className="ai-image-attachment-tools">
+                    <div className="ai-image-attachment-tools">
                         <button
                           type="button"
                           onClick={() => void openAiAttachmentTextPicker()}
@@ -1907,10 +1923,6 @@ export const MistakeDetailPanel = ({
                             {maxImagesPerRequest > 0 ? `/${maxImagesPerRequest}` : ""} 张
                           </span>
                         ) : null}
-                      </div>
-                      <button type="submit" disabled={!canSend}>
-                        {aiSending ? "发送中..." : "发送"}
-                      </button>
                     </div>
                     {imageCapabilityMessage ? (
                       <p className="state-text compact-state state-warning">{imageCapabilityMessage}</p>
@@ -2005,7 +2017,7 @@ export const MistakeDetailPanel = ({
                         )}
                       </div>
                     ) : null}
-                  </form>
+                  </AiComposer>
                 </>
               ) : (
                 <div className="ai-empty-conversation">

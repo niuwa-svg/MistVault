@@ -816,9 +816,13 @@ const createdSessions = Array.from({ length: 5 }, () =>
   assertOk(services.aiSessionService.createSession(mistake.id))
 );
 assert(createdSessions.length === 5, "Should create five AI sessions for one mistake.");
+const initialActiveSessions = assertOk(services.aiSessionService.listSessions(mistake.id));
 assert(
-  createdSessions.every((session, index) => session.title === `AI 对话 ${index + 1}`),
-  "AI session default titles should be generated."
+  initialActiveSessions
+    .map((session) => Number(session.title.match(/\d+$/)?.[0]))
+    .sort((left, right) => left - right)
+    .join(",") === "1,2,3,4,5",
+  "AI session default titles should form a compact sequence."
 );
 assertNoSensitiveValues(createdSessions, "AI session DTO");
 
@@ -836,13 +840,24 @@ assert(
   "Deleted AI session should not appear in active session list."
 );
 assert(
+  activeSessionsAfterDelete
+    .map((session) => Number(session.title.match(/\d+$/)?.[0]))
+    .sort((left, right) => left - right)
+    .join(",") === "1,2,3,4",
+  "Deleting an AI session should compact remaining session titles."
+);
+assert(
   assertOk(services.mistakeService.get(mistake.id)).id === mistake.id,
   "Deleting an AI session should not delete the mistake."
 );
 const replacementSession = assertOk(services.aiSessionService.createSession(mistake.id));
 assert(
-  replacementSession.title === "AI 对话 6",
-  "Creating a session after deleting an earlier one should use a new title number."
+  Number(
+    assertOk(services.aiSessionService.listSessions(mistake.id))
+      .find((session) => session.id === replacementSession.id)
+      ?.title.match(/\d+$/)?.[0]
+  ) === 5,
+  "Creating a session after deleting an earlier one should use the compact next title number."
 );
 assert(
   assertFail(services.aiSessionService.getSessionMessages(createdSessions[1].id)) ===

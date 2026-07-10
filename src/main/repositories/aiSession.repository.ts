@@ -228,6 +228,27 @@ export class AiSessionRepository {
     return result.changes > 0;
   }
 
+  renumberActiveSessionTitles(mistakeId: string, updatedAt: string): void {
+    const sessions = this.adapter.all<{ id: string }>(
+      `
+        SELECT id
+        FROM ai_sessions
+        WHERE mistake_id = ?
+          AND status = 'active'
+          AND deleted_at IS NULL
+        ORDER BY created_at ASC, id ASC
+      `,
+      [mistakeId]
+    );
+
+    sessions.forEach((session, index) => {
+      this.adapter.run(
+        "UPDATE ai_sessions SET title = ?, updated_at = ? WHERE id = ?",
+        [`AI 对话 ${index + 1}`, updatedAt, session.id]
+      );
+    });
+  }
+
   listMessages(sessionId: string): AiMessage[] {
     const rows = this.adapter.all<AiMessageRow>(
       `

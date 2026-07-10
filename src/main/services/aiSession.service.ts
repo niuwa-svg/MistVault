@@ -516,7 +516,9 @@ export class AiSessionService {
         return serviceFail("MISTAKE_NOT_FOUND", "Mistake was not found.");
       }
 
-      return serviceOk(result.session);
+      const now = new Date().toISOString();
+      this.aiSessionRepository.renumberActiveSessionTitles(mistakeId, now);
+      return serviceOk(this.aiSessionRepository.getActiveSessionById(result.session.id) ?? result.session);
     } catch (error) {
       return serviceFail("AI_SESSION_CREATE_FAILED", "Failed to create AI session.", error);
     }
@@ -528,13 +530,18 @@ export class AiSessionService {
     }
 
     return captureServiceError(() => {
-      const deleted = this.aiSessionRepository.softDeleteSession(
-        sessionId,
-        new Date().toISOString()
-      );
-      if (!deleted) {
-        throw new Error("AI_SESSION_NOT_FOUND");
-      }
+      this.adapter.transaction(() => {
+        const session = this.aiSessionRepository.getActiveSessionById(sessionId);
+        if (!session) {
+          throw new Error("AI_SESSION_NOT_FOUND");
+        }
+        const now = new Date().toISOString();
+        const deleted = this.aiSessionRepository.softDeleteSession(sessionId, now);
+        if (!deleted) {
+          throw new Error("AI_SESSION_NOT_FOUND");
+        }
+        this.aiSessionRepository.renumberActiveSessionTitles(session.mistakeId, now);
+      });
       return { id: sessionId };
     }, "AI_SESSION_DELETE_FAILED", "Failed to delete AI session.");
   }
