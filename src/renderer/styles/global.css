@@ -720,10 +720,36 @@ button:disabled {
   font-size: 13px;
 }
 
-.ai-message-composer textarea {
+.ai-composer-editor {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: text;
+  line-height: 1.55;
   min-height: 86px;
+  outline: none;
+  overflow: auto;
+  padding: 8px 10px;
   pointer-events: auto;
   resize: vertical;
+  white-space: pre-wrap;
+}
+
+.ai-composer-editor:empty::before {
+  color: var(--muted);
+  content: attr(data-placeholder);
+  pointer-events: none;
+}
+
+.ai-composer-editor:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--focus) 35%, transparent);
+}
+
+.ai-composer-editor[contenteditable="false"] {
+  cursor: not-allowed;
+  opacity: 0.55;
+  pointer-events: none;
 }
 
 .ai-image-attachment-tools {

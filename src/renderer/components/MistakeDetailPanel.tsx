@@ -145,40 +145,75 @@ type AiComposerProps = {
 };
 
 const AiComposer = ({ sessionId, sending, canAttemptSend, onSend, children }: AiComposerProps) => {
-  const [draft, setDraft] = useState("");
+  const [draftLength, setDraftLength] = useState(0);
+  const editorRef = useRef<HTMLDivElement | null>(null);
+  const wasSendingRef = useRef(sending);
+
+  const readDraft = (): string => editorRef.current?.innerText.replace(/\r/g, "") ?? "";
+  const focusEditor = () => {
+    window.requestAnimationFrame(() => editorRef.current?.focus({ preventScroll: true }));
+  };
+
+  const clearDraft = () => {
+    if (editorRef.current) {
+      editorRef.current.textContent = "";
+    }
+    setDraftLength(0);
+  };
 
   useEffect(() => {
-    setDraft("");
+    clearDraft();
+    focusEditor();
   }, [sessionId]);
 
-  const canSend =
-    canAttemptSend && draft.trim().length > 0 && draft.trim().length <= maxAiUserMessageChars;
+  useEffect(() => {
+    if (wasSendingRef.current && !sending) {
+      focusEditor();
+    }
+    wasSendingRef.current = sending;
+  }, [sending]);
+
+  const canSend = canAttemptSend && draftLength > 0 && draftLength <= maxAiUserMessageChars;
 
   return (
     <form
       className="ai-message-composer"
       onSubmit={(event) => {
         event.preventDefault();
-        const content = draft.trim();
+        const content = readDraft().trim();
         if (!content || !canSend) {
           return;
         }
-        setDraft("");
+        clearDraft();
         onSend(content);
       }}
     >
       <label>
         <span>继续追问</span>
-        <textarea
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          maxLength={maxAiUserMessageChars}
-          placeholder="输入你想继续追问的内容"
-          disabled={!sessionId}
+        <div
+          ref={editorRef}
+          className="ai-composer-editor"
+          contentEditable={Boolean(sessionId)}
+          role="textbox"
+          aria-multiline="true"
+          aria-label="输入你想继续追问的内容"
+          data-placeholder="输入你想继续追问的内容"
+          suppressContentEditableWarning
+          onInput={(event) => {
+            const editor = event.currentTarget;
+            const text = editor.innerText.replace(/\r/g, "");
+            if (text.length > maxAiUserMessageChars) {
+              editor.textContent = text.slice(0, maxAiUserMessageChars);
+              setDraftLength(maxAiUserMessageChars);
+              focusEditor();
+              return;
+            }
+            setDraftLength(text.length);
+          }}
         />
       </label>
       <div className="ai-composer-actions">
-        <span>{draft.length}/{maxAiUserMessageChars}</span>
+        <span>{draftLength}/{maxAiUserMessageChars}</span>
         {children}
         <button type="submit" disabled={!canSend}>
           {sending ? "发送中..." : "发送"}
