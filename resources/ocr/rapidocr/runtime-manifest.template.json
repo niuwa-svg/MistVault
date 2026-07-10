@@ -1,0 +1,26 @@
+{
+  "name": "MistVault RapidOCR local runtime",
+  "engine": "rapidocr",
+  "engineVersion": "3.9.1",
+  "buildTool": "PyInstaller",
+  "layout": {
+    "helper": "rapidocr-helper.exe",
+    "runtime": "runtime/",
+    "python": "runtime/python/",
+    "sitePackages": "runtime/site-packages/",
+    "helperScript": "runtime/helper/rapidocr_helper.py",
+    "models": "models/",
+    "licenses": "licenses/"
+  },
+  "models": [
+    {
+      "file": "models/PP-OCRv6_det_small.onnx"
+    },
+    {
+      "file": "models/PP-OCRv6_rec_small.onnx"
+    },
+    {
+      "file": "models/ch_ppocr_mobile_v2.0_cls_mobile.onnx"
+    }
+  ]
+}

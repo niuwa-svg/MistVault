@@ -10,3 +10,14 @@ release/
 .env
 .DS_Store
 Thumbs.db
+
+# RapidOCR local runtime artifacts
+/resources/ocr/rapidocr/rapidocr-helper.exe
+/resources/ocr/rapidocr/runtime/
+/resources/ocr/rapidocr/models/
+/resources/ocr/rapidocr/runtime-manifest.json
+/resources/ocr/rapidocr/**/*.dll
+/resources/ocr/rapidocr/**/*.pyd
+/resources/ocr/rapidocr/**/*.onnx
+/resources/ocr/rapidocr/**/*.zip
+/resources/ocr/rapidocr/**/*.7z
