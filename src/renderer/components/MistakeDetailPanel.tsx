@@ -712,6 +712,14 @@ export const MistakeDetailPanel = ({
   const [aiSending, setAiSending] = useState(false);
   const aiRequestSeq = useRef(0);
   const currentMistakeIdRef = useRef<string | null>(null);
+  const aiComposerRef = useRef<HTMLTextAreaElement | null>(null);
+
+  const resetAiInput = (value = "") => {
+    setAiInput(value);
+    if (aiComposerRef.current) {
+      aiComposerRef.current.value = value;
+    }
+  };
 
   const editing = mode === "create" || mode === "edit";
   const groupedAttachments = useMemo(() => {
@@ -795,7 +803,7 @@ export const MistakeDetailPanel = ({
     setAiSessions([]);
     setActiveAiSessionId(null);
     setAiMessages([]);
-    setAiInput("");
+    resetAiInput();
     setSelectedAiImageAttachmentIds([]);
     setAiImagePickerOpen(false);
     setSelectedAiAttachmentTextIds([]);
@@ -1320,7 +1328,7 @@ export const MistakeDetailPanel = ({
 
     setActiveAiSessionId(sessionId);
     setAiMessages([]);
-    setAiInput("");
+    resetAiInput();
     setSelectedAiImageAttachmentIds([]);
     setAiImagePickerOpen(false);
     setAiError(null);
@@ -1508,7 +1516,7 @@ export const MistakeDetailPanel = ({
   };
 
   const sendAiMessage = async () => {
-    const content = aiInput.trim();
+    const content = (aiComposerRef.current?.value ?? aiInput).trim();
     if (!activeAiSessionId || aiSending) {
       return;
     }
@@ -1628,7 +1636,7 @@ export const MistakeDetailPanel = ({
     setAiError(null);
     setAiCopyMessage(null);
     setAiContextWarning("none");
-    setAiInput("");
+    resetAiInput();
     setAiMessages((current) => [...current, optimisticUserMessage, optimisticAssistantMessage]);
 
     try {
@@ -1854,10 +1862,14 @@ export const MistakeDetailPanel = ({
                     <label>
                       <span>继续追问</span>
                       <textarea
-                        value={aiInput}
-                        onChange={(event) => {
+                        ref={aiComposerRef}
+                        defaultValue={aiInput}
+                        onInput={(event) => {
                           setAiInput(event.target.value);
                           setAiError(null);
+                        }}
+                        onPointerDown={() => {
+                          window.requestAnimationFrame(() => aiComposerRef.current?.focus());
                         }}
                         maxLength={maxAiUserMessageChars}
                         placeholder="输入你想继续追问的内容"
