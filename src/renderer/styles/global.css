@@ -721,6 +721,31 @@ button:disabled {
   resize: vertical;
 }
 
+.ai-debug-panel {
+  border: 1px dashed var(--border-strong);
+  border-radius: 7px;
+  display: grid;
+  gap: 8px;
+  padding: 8px;
+}
+
+.ai-debug-panel summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.ai-debug-panel pre {
+  background: var(--surface-soft);
+  border-radius: 6px;
+  font-size: 12px;
+  margin: 0;
+  max-height: 220px;
+  overflow: auto;
+  padding: 8px;
+  white-space: pre-wrap;
+}
+
 .ai-image-attachment-tools {
   align-items: center;
   display: flex;

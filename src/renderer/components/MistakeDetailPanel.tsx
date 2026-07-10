@@ -700,6 +700,7 @@ export const MistakeDetailPanel = ({
   const [aiError, setAiError] = useState<string | null>(null);
   const [aiCopyMessage, setAiCopyMessage] = useState<string | null>(null);
   const [aiContextWarning, setAiContextWarning] = useState<AiContextWarning>("none");
+  const [aiTextareaDiagnosis, setAiTextareaDiagnosis] = useState<Record<string, unknown> | null>(null);
   const [aiSessionsLoading, setAiSessionsLoading] = useState(false);
   const [aiMessagesLoading, setAiMessagesLoading] = useState(false);
   const [aiSessionBusy, setAiSessionBusy] = useState(false);
@@ -709,6 +710,9 @@ export const MistakeDetailPanel = ({
   const aiMessageRequestSeq = useRef(0);
   const activeAiSessionIdRef = useRef<string | null>(null);
   const currentMistakeIdRef = useRef<string | null>(null);
+  const aiTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const aiTextareaMountCountRef = useRef(0);
+  const previousAiInputLengthRef = useRef(0);
 
   const editing = mode === "create" || mode === "edit";
   const groupedAttachments = useMemo(() => {
@@ -762,6 +766,31 @@ export const MistakeDetailPanel = ({
     aiMessageRequestSeq.current === requestId &&
     currentMistakeIdRef.current === mistakeId &&
     activeAiSessionIdRef.current === sessionId;
+  const setAiTextareaElement = (textarea: HTMLTextAreaElement | null) => {
+    if (aiTextareaRef.current === textarea) {
+      return;
+    }
+
+    aiTextareaRef.current = textarea;
+    if (textarea) {
+      aiTextareaMountCountRef.current += 1;
+      if (import.meta.env.DEV) {
+        console.debug("[AI textarea] mount", {
+          mountCount: aiTextareaMountCountRef.current,
+          disabled: textarea.disabled,
+          readOnly: textarea.readOnly,
+          valueLength: textarea.value.length
+        });
+      }
+      return;
+    }
+
+    if (import.meta.env.DEV) {
+      console.debug("[AI textarea] unmount", {
+        mountCount: aiTextareaMountCountRef.current
+      });
+    }
+  };
 
   useEffect(() => {
     if (mode === "create") {
@@ -858,6 +887,7 @@ export const MistakeDetailPanel = ({
     setAiError(null);
     setAiCopyMessage(null);
     setAiContextWarning("none");
+    setAiTextareaDiagnosis(null);
     setAiProviderCapabilities([]);
     setAiSessionsLoading(false);
     setAiMessagesLoading(false);
@@ -1001,6 +1031,24 @@ export const MistakeDetailPanel = ({
     mistake,
     mode
   ]);
+
+  useEffect(() => {
+    if (!import.meta.env.DEV || mode !== "view") {
+      previousAiInputLengthRef.current = aiInput.length;
+      return;
+    }
+
+    const previousLength = previousAiInputLengthRef.current;
+    if (previousLength !== aiInput.length) {
+      console.debug("[AI input state]", {
+        previousLength,
+        nextLength: aiInput.length,
+        activeAiSessionId,
+        activeSessionExists: aiSessions.some((session) => session.id === activeAiSessionId)
+      });
+      previousAiInputLengthRef.current = aiInput.length;
+    }
+  }, [activeAiSessionId, aiInput.length, aiSessions, mode]);
 
   useEffect(() => {
     if (!mistake?.nodeId) {
@@ -1793,6 +1841,81 @@ export const MistakeDetailPanel = ({
       !currentAiImageCapability?.supportsImageInput;
     const activeSessionReady = Boolean(activeSession);
     const textareaDisabled = !activeAiSessionId;
+    const aiComposerDebugState = {
+      activeAiSessionId,
+      activeSessionExists: Boolean(activeSession),
+      aiSessionsCount: aiSessions.length,
+      aiSessionIds: aiSessions.map((session) => session.id),
+      aiSessionTitles: aiSessions.map((session) => session.title),
+      aiInputLength: aiInput.length,
+      textareaShouldDisable: !activeAiSessionId,
+      aiSessionsLoading,
+      aiMessagesLoading,
+      aiSessionBusy,
+      aiSending,
+      aiStatusReady: aiStatus?.ready,
+      mistakeId: mistake.id,
+      textareaMountCount: aiTextareaMountCountRef.current
+    };
+    const diagnoseAiTextarea = () => {
+      if (!import.meta.env.DEV) {
+        return;
+      }
+
+      const textarea = aiTextareaRef.current;
+      const rect = textarea?.getBoundingClientRect();
+      const hit = rect
+        ? document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)
+        : null;
+      const computed = textarea ? getComputedStyle(textarea) : null;
+      const hitClass =
+        hit instanceof HTMLElement
+          ? typeof hit.className === "string"
+            ? hit.className
+            : null
+          : null;
+
+      const diagnosis = {
+        exists: Boolean(textarea),
+        disabled: textarea?.disabled,
+        readOnly: textarea?.readOnly,
+        valueLength: textarea?.value.length,
+        activeElementIsTextarea: document.activeElement === textarea,
+        hitIsTextarea: hit === textarea,
+        hitTag: hit instanceof HTMLElement ? hit.tagName : null,
+        hitClass,
+        rect: rect
+          ? {
+              width: rect.width,
+              height: rect.height,
+              top: Math.round(rect.top),
+              left: Math.round(rect.left)
+            }
+          : null,
+        computed: computed
+          ? {
+              pointerEvents: computed.pointerEvents,
+              display: computed.display,
+              visibility: computed.visibility,
+              opacity: computed.opacity,
+              zIndex: computed.zIndex
+            }
+          : null,
+        activeAiSessionId,
+        activeSessionExists: Boolean(activeSession),
+        aiSessions: aiSessions.map((session) => ({
+          id: session.id,
+          title: session.title
+        })),
+        aiSessionsLoading,
+        aiMessagesLoading,
+        aiSessionBusy,
+        aiSending
+      };
+
+      setAiTextareaDiagnosis(diagnosis);
+      console.debug("[AI textarea diagnosis]", diagnosis);
+    };
     const canSend =
       Boolean(activeAiSessionId) &&
       Boolean(aiStatus?.ready) &&
@@ -1930,8 +2053,41 @@ export const MistakeDetailPanel = ({
                     <label>
                       <span>继续追问</span>
                       <textarea
+                        ref={setAiTextareaElement}
                         value={aiInput}
+                        onFocus={() => {
+                          if (import.meta.env.DEV) {
+                            console.debug("[AI textarea] focus", {
+                              activeAiSessionId,
+                              activeSessionExists: Boolean(activeSession),
+                              aiInputLength: aiInput.length
+                            });
+                          }
+                        }}
+                        onBlur={() => {
+                          if (import.meta.env.DEV) {
+                            console.debug("[AI textarea] blur", {
+                              activeAiSessionId,
+                              activeSessionExists: Boolean(activeSession),
+                              aiInputLength: aiInput.length
+                            });
+                          }
+                        }}
+                        onInput={(event) => {
+                          if (import.meta.env.DEV) {
+                            console.debug("[AI textarea] input", {
+                              valueLength: event.currentTarget.value.length,
+                              activeAiSessionId
+                            });
+                          }
+                        }}
                         onChange={(event) => {
+                          if (import.meta.env.DEV) {
+                            console.debug("[AI textarea] change", {
+                              valueLength: event.target.value.length,
+                              activeAiSessionId
+                            });
+                          }
                           setAiInput(event.target.value);
                           setAiError(null);
                         }}
@@ -1965,6 +2121,18 @@ export const MistakeDetailPanel = ({
                         {aiSending ? "发送中..." : "发送"}
                       </button>
                     </div>
+                    {import.meta.env.DEV ? (
+                      <details className="ai-debug-panel">
+                        <summary>AI 输入诊断</summary>
+                        <button type="button" onClick={diagnoseAiTextarea}>
+                          诊断输入框
+                        </button>
+                        <pre>{JSON.stringify(aiComposerDebugState, null, 2)}</pre>
+                        {aiTextareaDiagnosis ? (
+                          <pre>{JSON.stringify(aiTextareaDiagnosis, null, 2)}</pre>
+                        ) : null}
+                      </details>
+                    ) : null}
                     {imageCapabilityMessage ? (
                       <p className="state-text compact-state state-warning">{imageCapabilityMessage}</p>
                     ) : null}
