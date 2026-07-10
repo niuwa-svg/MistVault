@@ -17,7 +17,12 @@ import type {
 } from "@shared/types";
 import { sanitizeApiErrorDetails } from "@shared/types";
 import type { DatabaseAdapter } from "../db/adapters/database.adapter";
-import type { AiSessionRepository, AttachmentsRepository } from "../repositories";
+import type {
+  AiSessionRepository,
+  AttachmentTextCacheRepository,
+  AttachmentsRepository
+} from "../repositories";
+import type { SelectedAttachmentExtractedTextForAi } from "../repositories/attachmentTextCache.repository";
 import type { NodeService } from "./node.service";
 import type { PrivateAiSettings, SettingsService } from "./settings.service";
 import { captureServiceError, serviceFail, serviceOk } from "./serviceResult";
@@ -42,6 +47,8 @@ const nearLimitHistoryChars = Math.floor(maxHistoryChars * 0.8);
 const maxTurns = 20;
 const timeoutMs = 60_000;
 const maxUserMessageChars = 8_000;
+const maxAttachmentTextCharsPerItem = 4_000;
+const maxAttachmentTextCharsTotal = 12_000;
 const imageAttachmentSourceKind = "imageAttachment";
 const supportedImageExts = new Set([".jpg", ".jpeg", ".png", ".webp", ".bmp"]);
 const supportedImageMimeTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/bmp"]);
@@ -160,6 +167,76 @@ type PreparedImageAttachment = {
   mimeType: string;
   size: number;
   dataUrl: string;
+};
+
+const safeAttachmentName = (value: string): string =>
+  value
+    .split(/[\\/]/)
+    .pop()
+    ?.trim()
+    .slice(0, 255) || "附件";
+
+const sanitizeAttachmentTextForPrompt = (value: string): string =>
+  redactText(value)
+    .replace(/data:[^\s"']+/gi, "<redacted-data-url>")
+    .replace(/\b[A-Za-z0-9+/]{80,}={0,2}\b/g, "<redacted-base64>")
+    .replace(/\b(?:storedName|relativePath)\b/gi, "<redacted>");
+
+const truncateAttachmentText = (value: string, maxChars: number): string => {
+  const normalized = sanitizeAttachmentTextForPrompt(value).trim();
+  if (normalized.length <= maxChars) {
+    return normalized;
+  }
+  return `${normalized.slice(0, maxChars)}\n[提取文本过长，已截断]`;
+};
+
+const buildAttachmentTextBlock = (items: SelectedAttachmentExtractedTextForAi[]): string => {
+  let remaining = maxAttachmentTextCharsTotal;
+  const entries: string[] = [];
+  for (const item of items) {
+    if (remaining <= 0) {
+      break;
+    }
+    const limit = Math.min(maxAttachmentTextCharsPerItem, remaining);
+    const text = truncateAttachmentText(item.extractedText, limit);
+    remaining -= Math.min(item.extractedText.trim().length, limit);
+    entries.push(
+      [
+        `来源附件：${safeAttachmentName(item.originalName)}`,
+        `字段：${item.field}`,
+        `来源类型：${item.sourceType === "ocr" ? "OCR" : "文本提取"}`,
+        "提取文本：",
+        text
+      ].join("\n")
+    );
+  }
+
+  return [
+    "【附件提取文本 / OCR 文本】",
+    "说明：以下内容来自当前错题附件的 OCR / 文本提取结果，并非 AI 直接读取原文件。OCR 或解析可能存在错误，请结合题目原文判断。",
+    "",
+    ...entries
+  ].join("\n\n");
+};
+
+const replaceLastUserMessageContent = (
+  messages: AiChatMessage[],
+  originalContent: string,
+  nextContent: string
+): AiChatMessage[] => {
+  const nextMessages = messages.map((message) => ({ ...message }));
+  for (let index = nextMessages.length - 1; index >= 0; index -= 1) {
+    const message = nextMessages[index];
+    if (
+      message?.role === "user" &&
+      typeof message.content === "string" &&
+      message.content.trim() === originalContent.trim()
+    ) {
+      nextMessages[index] = { ...message, content: nextContent };
+      break;
+    }
+  }
+  return nextMessages;
 };
 
 const normalizeImageExt = (attachment: Attachment): string => {
@@ -348,6 +425,7 @@ export class AiSessionService {
     private readonly adapter: DatabaseAdapter,
     private readonly aiSessionRepository: AiSessionRepository,
     private readonly attachmentsRepository: AttachmentsRepository,
+    private readonly attachmentTextCacheRepository: AttachmentTextCacheRepository,
     private readonly settingsService: SettingsService,
     private readonly mistakeService: MistakeService,
     private readonly nodeService: NodeService,
@@ -507,6 +585,25 @@ export class AiSessionService {
     }
 
     const imageAttachmentIds = this.normalizeImageAttachmentIds(options.imageAttachmentIds);
+    const attachmentTextIds = this.normalizeAttachmentTextIds(options.attachmentTextIds);
+    let selectedAttachmentTexts: SelectedAttachmentExtractedTextForAi[];
+    try {
+      selectedAttachmentTexts = this.attachmentTextCacheRepository.listSuccessfulTextsForAiSession(
+        mistakeResult.data.id,
+        attachmentTextIds
+      );
+    } catch {
+      return serviceFail(
+        "AI_ATTACHMENT_TEXT_UNAVAILABLE",
+        "Selected attachment text is unavailable for the current mistake."
+      );
+    }
+    if (selectedAttachmentTexts.length !== attachmentTextIds.length) {
+      return serviceFail(
+        "AI_ATTACHMENT_TEXT_UNAVAILABLE",
+        "Selected attachment text is unavailable for the current mistake."
+      );
+    }
     const preparedImages = this.prepareImageAttachments(
       imageAttachmentIds,
       mistakeResult.data.id,
@@ -544,6 +641,20 @@ export class AiSessionService {
             field: image.attachment.field as AttachmentField
           });
         }
+        for (const item of selectedAttachmentTexts) {
+          const attachment = this.attachmentsRepository.getById(item.attachmentId);
+          this.aiSessionRepository.appendMessageSource({
+            id: randomUUID(),
+            messageId: message.id,
+            sourceKind: "attachmentText",
+            attachmentId: item.attachmentId,
+            originalName: safeAttachmentName(item.originalName),
+            mimeType: attachment?.mimeType || null,
+            ext: attachment?.ext || null,
+            size: attachment?.size ?? null,
+            field: item.field
+          });
+        }
         return this.aiSessionRepository.getMessageById(message.id) ?? message;
       })(),
       assistantMessage: this.aiSessionRepository.appendMessage({
@@ -569,9 +680,12 @@ export class AiSessionService {
       selectedHistory.messages,
       preparedImages.data.length > 0
     );
+    const requestContent = selectedAttachmentTexts.length > 0
+      ? `${content.trim()}\n\n${buildAttachmentTextBlock(selectedAttachmentTexts)}`
+      : content.trim();
     const requestMessages = attachImagesToLastUserMessage(
-      providerMessages,
-      content.trim(),
+      replaceLastUserMessageContent(providerMessages, content.trim(), requestContent),
+      requestContent,
       preparedImages.data
     );
 
@@ -661,6 +775,10 @@ export class AiSessionService {
           .map((item) => item.trim())
       )
     );
+  }
+
+  private normalizeAttachmentTextIds(value: unknown): string[] {
+    return this.normalizeImageAttachmentIds(value);
   }
 
   private prepareImageAttachments(

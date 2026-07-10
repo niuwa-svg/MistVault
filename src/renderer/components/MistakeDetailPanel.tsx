@@ -74,9 +74,12 @@ type LinkCandidate = {
 };
 
 type LinkedPathState = Record<string, string>;
-type AiImageTextStatus = "idle" | "checking" | "hasText" | "none";
-
-const ocrTextDisclaimer = "以下内容是 OCR / 文本提取结果，不是模型直接看到的原图，可能存在识别错误。";
+type AiAttachmentTextItem = {
+  attachment: Attachment;
+  sourceType: "ocr" | "text";
+  textLength: number;
+  isEdited: boolean;
+};
 
 const attachmentDisplayFields: { value: AttachmentField; key: TranslationKey }[] = [
   { value: "question", key: "questionAttachments" },
@@ -156,6 +159,7 @@ const aiSessionErrorMessages: Record<string, string> = {
   AI_SESSION_LIMIT_REACHED: "每道题最多保留 5 个 AI 会话，可删除旧会话后再新建。",
   AI_MESSAGE_CONTENT_REQUIRED: "请输入要追问的内容。",
   AI_MESSAGE_TOO_LONG: "追问内容过长，请控制在 8000 字以内。",
+  AI_ATTACHMENT_TEXT_UNAVAILABLE: "所选附件提取文本不可用、尚未成功提取，或不属于当前错题。请重新选择。",
   AI_IMAGE_INPUT_UNSUPPORTED:
     "当前 provider/model 暂不支持直接图片输入。你仍然可以使用文字追问，或先对图片进行 OCR / 文本提取后发送给 AI。",
   AI_IMAGE_ATTACHMENT_REQUIRED: "请先选择要发送给 AI 分析的图片附件。",
@@ -695,8 +699,10 @@ export const MistakeDetailPanel = ({
   const [aiInput, setAiInput] = useState("");
   const [selectedAiImageAttachmentIds, setSelectedAiImageAttachmentIds] = useState<string[]>([]);
   const [aiImagePickerOpen, setAiImagePickerOpen] = useState(false);
-  const [aiImageTextStatus, setAiImageTextStatus] = useState<AiImageTextStatus>("idle");
-  const [aiImageTextBusy, setAiImageTextBusy] = useState(false);
+  const [selectedAiAttachmentTextIds, setSelectedAiAttachmentTextIds] = useState<string[]>([]);
+  const [aiAttachmentTextPickerOpen, setAiAttachmentTextPickerOpen] = useState(false);
+  const [aiAttachmentTextLoading, setAiAttachmentTextLoading] = useState(false);
+  const [aiAttachmentTextItems, setAiAttachmentTextItems] = useState<AiAttachmentTextItem[]>([]);
   const [aiError, setAiError] = useState<string | null>(null);
   const [aiCopyMessage, setAiCopyMessage] = useState<string | null>(null);
   const [aiContextWarning, setAiContextWarning] = useState<AiContextWarning>("none");
@@ -735,6 +741,13 @@ export const MistakeDetailPanel = ({
         .map((id) => aiImageAttachments.find((attachment) => attachment.id === id))
         .filter((attachment): attachment is Attachment => Boolean(attachment)),
     [aiImageAttachments, selectedAiImageAttachmentIds]
+  );
+  const selectedAiAttachmentTexts = useMemo(
+    () =>
+      selectedAiAttachmentTextIds
+        .map((id) => aiAttachmentTextItems.find((item) => item.attachment.id === id))
+        .filter((item): item is AiAttachmentTextItem => Boolean(item)),
+    [aiAttachmentTextItems, selectedAiAttachmentTextIds]
   );
 
   useEffect(() => {
@@ -777,46 +790,6 @@ export const MistakeDetailPanel = ({
   }, [currentAiImageCapability?.provider, currentAiImageCapability?.supportsImageInput]);
 
   useEffect(() => {
-    let active = true;
-
-    const checkExtractedText = async () => {
-      if (mode !== "view" || !aiStatus?.ready || currentAiImageCapability?.supportsImageInput) {
-        setAiImageTextStatus("idle");
-        return;
-      }
-
-      if (aiImageAttachments.length === 0) {
-        setAiImageTextStatus("none");
-        return;
-      }
-
-      setAiImageTextStatus("checking");
-      const statuses = await Promise.all(
-        aiImageAttachments.map((attachment) =>
-          mistVaultApi.extensions.extraction.getStatus(attachment.id)
-        )
-      );
-      if (!active) {
-        return;
-      }
-
-      setAiImageTextStatus(
-        statuses.some((status) => status.ok && status.data.hasText) ? "hasText" : "none"
-      );
-    };
-
-    void checkExtractedText();
-    return () => {
-      active = false;
-    };
-  }, [
-    aiImageAttachments,
-    aiStatus?.ready,
-    currentAiImageCapability?.supportsImageInput,
-    mode
-  ]);
-
-  useEffect(() => {
     currentMistakeIdRef.current = mistake?.id ?? null;
     aiRequestSeq.current += 1;
     setAiSessions([]);
@@ -825,8 +798,10 @@ export const MistakeDetailPanel = ({
     setAiInput("");
     setSelectedAiImageAttachmentIds([]);
     setAiImagePickerOpen(false);
-    setAiImageTextStatus("idle");
-    setAiImageTextBusy(false);
+    setSelectedAiAttachmentTextIds([]);
+    setAiAttachmentTextPickerOpen(false);
+    setAiAttachmentTextLoading(false);
+    setAiAttachmentTextItems([]);
     setAiError(null);
     setAiCopyMessage(null);
     setAiContextWarning("none");
@@ -866,36 +841,50 @@ export const MistakeDetailPanel = ({
       }
 
       setAiSessionsLoading(true);
-      const result = await mistVaultApi.extensions.ai.sessions.listSessions(requestMistakeId);
-      if (!active || aiRequestSeq.current !== requestSeq || currentMistakeIdRef.current !== requestMistakeId) {
-        return;
-      }
-
-      if (result.ok) {
-        setAiSessions(result.data);
-        const nextActiveSessionId = result.data[0]?.id ?? null;
-        setActiveAiSessionId(nextActiveSessionId);
-        if (nextActiveSessionId) {
-          setAiMessagesLoading(true);
-          const messages = await mistVaultApi.extensions.ai.sessions.getSessionMessages(nextActiveSessionId);
-          if (!active || aiRequestSeq.current !== requestSeq || currentMistakeIdRef.current !== requestMistakeId) {
-            return;
-          }
-          if (messages.ok) {
-            setAiMessages(messages.data);
-          } else {
-            setAiMessages([]);
-            setAiError(aiErrorMessage(messages.error.code, messages.error.message));
-          }
-          setAiMessagesLoading(false);
+      try {
+        const result = await mistVaultApi.extensions.ai.sessions.listSessions(requestMistakeId);
+        if (!active || aiRequestSeq.current !== requestSeq || currentMistakeIdRef.current !== requestMistakeId) {
+          return;
         }
-      } else {
-        setAiSessions([]);
-        setActiveAiSessionId(null);
-        setAiMessages([]);
-        setAiError(aiErrorMessage(result.error.code, result.error.message));
+
+        if (result.ok) {
+          setAiSessions(result.data);
+          const nextActiveSessionId = result.data[0]?.id ?? null;
+          setActiveAiSessionId(nextActiveSessionId);
+          if (nextActiveSessionId) {
+            setAiMessagesLoading(true);
+            try {
+              const messages = await mistVaultApi.extensions.ai.sessions.getSessionMessages(nextActiveSessionId);
+              if (!active || aiRequestSeq.current !== requestSeq || currentMistakeIdRef.current !== requestMistakeId) {
+                return;
+              }
+              if (messages.ok) {
+                setAiMessages(messages.data);
+              } else {
+                setAiMessages([]);
+                setAiError(aiErrorMessage(messages.error.code, messages.error.message));
+              }
+            } finally {
+              if (active && aiRequestSeq.current === requestSeq && currentMistakeIdRef.current === requestMistakeId) {
+                setAiMessagesLoading(false);
+              }
+            }
+          }
+        } else {
+          setAiSessions([]);
+          setActiveAiSessionId(null);
+          setAiMessages([]);
+          setAiError(aiErrorMessage(result.error.code, result.error.message));
+        }
+      } catch {
+        if (active && aiRequestSeq.current === requestSeq && currentMistakeIdRef.current === requestMistakeId) {
+          setAiError(aiSessionErrorMessages.AI_SESSION_MESSAGES_FAILED);
+        }
+      } finally {
+        if (active && aiRequestSeq.current === requestSeq && currentMistakeIdRef.current === requestMistakeId) {
+          setAiSessionsLoading(false);
+        }
       }
-      setAiSessionsLoading(false);
     };
 
     if (mistake && mode === "view") {
@@ -1266,17 +1255,27 @@ export const MistakeDetailPanel = ({
   const loadAiMessagesForSession = async (sessionId: string) => {
     setAiMessagesLoading(true);
     setAiError(null);
-    const result = await mistVaultApi.extensions.ai.sessions.getSessionMessages(sessionId);
-    if (currentMistakeIdRef.current !== (mistake?.id ?? null)) {
-      return;
-    }
+    const requestMistakeId = mistake?.id ?? null;
+    try {
+      const result = await mistVaultApi.extensions.ai.sessions.getSessionMessages(sessionId);
+      if (currentMistakeIdRef.current !== requestMistakeId) {
+        return;
+      }
 
-    if (result.ok) {
-      setAiMessages(result.data);
-    } else {
-      setAiError(aiErrorMessage(result.error.code, result.error.message));
+      if (result.ok) {
+        setAiMessages(result.data);
+      } else {
+        setAiError(aiErrorMessage(result.error.code, result.error.message));
+      }
+    } catch {
+      if (currentMistakeIdRef.current === requestMistakeId) {
+        setAiError(aiSessionErrorMessages.AI_SESSION_MESSAGES_FAILED);
+      }
+    } finally {
+      if (currentMistakeIdRef.current === requestMistakeId) {
+        setAiMessagesLoading(false);
+      }
     }
-    setAiMessagesLoading(false);
   };
 
   const refreshAiSessions = async (preferredSessionId?: string | null): Promise<AiSession[]> => {
@@ -1285,27 +1284,33 @@ export const MistakeDetailPanel = ({
     }
 
     setAiSessionsLoading(true);
-    const result = await mistVaultApi.extensions.ai.sessions.listSessions(mistake.id);
-    if (currentMistakeIdRef.current !== mistake.id) {
-      return [];
-    }
+    try {
+      const result = await mistVaultApi.extensions.ai.sessions.listSessions(mistake.id);
+      if (currentMistakeIdRef.current !== mistake.id) {
+        return [];
+      }
 
-    if (!result.ok) {
-      setAiError(aiErrorMessage(result.error.code, result.error.message));
-      setAiSessions([]);
-      setActiveAiSessionId(null);
-      setAiMessages([]);
-      setAiSessionsLoading(false);
-      return [];
-    }
+      if (!result.ok) {
+        setAiError(aiErrorMessage(result.error.code, result.error.message));
+        return [];
+      }
 
-    const sessions = result.data;
-    const nextActiveSessionId =
-      sessions.find((session) => session.id === preferredSessionId)?.id ?? sessions[0]?.id ?? null;
-    setAiSessions(sessions);
-    setActiveAiSessionId(nextActiveSessionId);
-    setAiSessionsLoading(false);
-    return sessions;
+      const sessions = result.data;
+      const nextActiveSessionId =
+        sessions.find((session) => session.id === preferredSessionId)?.id ?? sessions[0]?.id ?? null;
+      setAiSessions(sessions);
+      setActiveAiSessionId(nextActiveSessionId);
+      return sessions;
+    } catch {
+      if (currentMistakeIdRef.current === mistake.id) {
+        setAiError(aiSessionErrorMessages.AI_SESSION_MESSAGES_FAILED);
+      }
+      return [];
+    } finally {
+      if (currentMistakeIdRef.current === mistake.id) {
+        setAiSessionsLoading(false);
+      }
+    }
   };
 
   const switchAiSession = async (sessionId: string) => {
@@ -1333,22 +1338,33 @@ export const MistakeDetailPanel = ({
     setAiSessionBusy(true);
     setAiError(null);
     setAiCopyMessage(null);
-    const result = await mistVaultApi.extensions.ai.sessions.createSession(mistake.id);
-    if (currentMistakeIdRef.current !== mistake.id) {
-      return;
-    }
+    const requestMistakeId = mistake.id;
+    try {
+      const result = await mistVaultApi.extensions.ai.sessions.createSession(requestMistakeId);
+      if (currentMistakeIdRef.current !== requestMistakeId) {
+        return;
+      }
 
-    if (result.ok) {
-      await refreshAiSessions(result.data.id);
-      setAiMessages([]);
-      setSelectedAiImageAttachmentIds([]);
-      setAiImagePickerOpen(false);
-      setAiContextWarning("none");
-    } else {
-      setAiError(aiErrorMessage(result.error.code, result.error.message));
-      await refreshAiSessions(activeAiSessionId);
+      if (result.ok) {
+        await refreshAiSessions(result.data.id);
+        setAiMessages([]);
+        setSelectedAiImageAttachmentIds([]);
+        setAiImagePickerOpen(false);
+        setSelectedAiAttachmentTextIds([]);
+        setAiAttachmentTextPickerOpen(false);
+        setAiContextWarning("none");
+      } else {
+        setAiError(aiErrorMessage(result.error.code, result.error.message));
+      }
+    } catch {
+      if (currentMistakeIdRef.current === requestMistakeId) {
+        setAiError(aiSessionErrorMessages.AI_SESSION_CREATE_FAILED);
+      }
+    } finally {
+      if (currentMistakeIdRef.current === requestMistakeId) {
+        setAiSessionBusy(false);
+      }
     }
-    setAiSessionBusy(false);
   };
 
   const deleteAiSession = async (session: AiSession) => {
@@ -1360,26 +1376,37 @@ export const MistakeDetailPanel = ({
     setAiSessionBusy(true);
     setAiError(null);
     setAiCopyMessage(null);
-    const result = await mistVaultApi.extensions.ai.sessions.deleteSession(session.id);
-    if (currentMistakeIdRef.current !== session.mistakeId) {
-      return;
-    }
+    const requestMistakeId = session.mistakeId;
+    try {
+      const result = await mistVaultApi.extensions.ai.sessions.deleteSession(session.id);
+      if (currentMistakeIdRef.current !== requestMistakeId) {
+        return;
+      }
 
-    if (!result.ok) {
-      setAiError(aiErrorMessage(result.error.code, result.error.message));
-    }
+      if (!result.ok) {
+        setAiError(aiErrorMessage(result.error.code, result.error.message));
+        return;
+      }
 
-    const sessions = await refreshAiSessions(session.id === activeAiSessionId ? null : activeAiSessionId);
-    const nextActiveSessionId =
-      sessions.find((item) => item.id === activeAiSessionId && item.id !== session.id)?.id ?? sessions[0]?.id ?? null;
-    setActiveAiSessionId(nextActiveSessionId);
-    setAiContextWarning("none");
-    if (nextActiveSessionId) {
-      await loadAiMessagesForSession(nextActiveSessionId);
-    } else {
-      setAiMessages([]);
+      const sessions = await refreshAiSessions(session.id === activeAiSessionId ? null : activeAiSessionId);
+      const nextActiveSessionId =
+        sessions.find((item) => item.id === activeAiSessionId && item.id !== session.id)?.id ?? sessions[0]?.id ?? null;
+      setActiveAiSessionId(nextActiveSessionId);
+      setAiContextWarning("none");
+      if (nextActiveSessionId) {
+        await loadAiMessagesForSession(nextActiveSessionId);
+      } else {
+        setAiMessages([]);
+      }
+    } catch {
+      if (currentMistakeIdRef.current === requestMistakeId) {
+        setAiError(aiSessionErrorMessages.AI_SESSION_DELETE_FAILED);
+      }
+    } finally {
+      if (currentMistakeIdRef.current === requestMistakeId) {
+        setAiSessionBusy(false);
+      }
     }
-    setAiSessionBusy(false);
   };
 
   const getAiImageCapabilityMessage = (): string | null => {
@@ -1421,60 +1448,63 @@ export const MistakeDetailPanel = ({
     });
   };
 
-  const appendImageExtractedTextToAiInput = async () => {
-    if (aiImageTextBusy || aiImageAttachments.length === 0) {
+  const openAiAttachmentTextPicker = async () => {
+    if (!activeAiSessionId || aiAttachmentTextLoading) {
       return;
     }
 
-    setAiImageTextBusy(true);
+    setAiAttachmentTextPickerOpen(true);
+    setAiAttachmentTextLoading(true);
     setAiError(null);
-
-    const textItems: Array<{ attachment: Attachment; text: string; sourceType: string }> = [];
-    for (const attachment of aiImageAttachments) {
-      const status = await mistVaultApi.extensions.extraction.getStatus(attachment.id);
-      if (!status.ok || !status.data.hasText) {
-        continue;
+    const requestMistakeId = mistake?.id ?? null;
+    try {
+      const results = await Promise.all(
+        attachments.map(async (attachment) => ({
+          attachment,
+          result: await mistVaultApi.extensions.extraction.getExtractedText(attachment.id)
+        }))
+      );
+      if (currentMistakeIdRef.current !== requestMistakeId) {
+        return;
       }
 
-      const text = await mistVaultApi.extensions.extraction.getExtractedText(attachment.id);
-      if (!text.ok || !text.data.extractedText.trim()) {
-        continue;
-      }
-
-      textItems.push({
-        attachment,
-        text: text.data.extractedText.trim(),
-        sourceType: text.data.sourceType === "ocr" ? "OCR" : "文本提取"
+      const items = results.flatMap(({ attachment, result }) => {
+        if (
+          !result.ok ||
+          result.data.extractionStatus !== "success" ||
+          !result.data.extractedText.trim() ||
+          (result.data.sourceType !== "ocr" && result.data.sourceType !== "text")
+        ) {
+          return [];
+        }
+        return [{
+          attachment,
+          sourceType: result.data.sourceType,
+          textLength: result.data.extractedText.trim().length,
+          isEdited: result.data.isEdited
+        }];
       });
+      setAiAttachmentTextItems(items);
+      setSelectedAiAttachmentTextIds((current) =>
+        current.filter((id) => items.some((item) => item.attachment.id === id))
+      );
+    } catch {
+      if (currentMistakeIdRef.current === requestMistakeId) {
+        setAiError("读取附件提取文本失败，请稍后重试。");
+      }
+    } finally {
+      if (currentMistakeIdRef.current === requestMistakeId) {
+        setAiAttachmentTextLoading(false);
+      }
     }
+  };
 
-    if (textItems.length === 0) {
-      setAiImageTextStatus("none");
-      setAiError("当前图片附件还没有可用的 OCR / 文本提取结果，请先在附件区域进行 OCR / 文本提取。");
-      setAiImageTextBusy(false);
-      return;
-    }
-
-    const extractedTextBlock = [
-      ocrTextDisclaimer,
-      "请基于这些文本进行分析，不要声称你直接看到了图片。",
-      "",
-      ...textItems.map(({ attachment, text, sourceType }) =>
-        [
-          `来源附件：${attachment.originalName}`,
-          `字段：${attachment.field}`,
-          `来源类型：${sourceType}`,
-          "提取文本：",
-          text
-        ].join("\n")
-      )
-    ].join("\n\n");
-
-    setAiInput((current) =>
-      current.trim() ? `${current.trim()}\n\n${extractedTextBlock}` : extractedTextBlock
+  const toggleAiAttachmentText = (attachmentId: string) => {
+    setSelectedAiAttachmentTextIds((current) =>
+      current.includes(attachmentId)
+        ? current.filter((id) => id !== attachmentId)
+        : [...current, attachmentId]
     );
-    setAiImageTextStatus("hasText");
-    setAiImageTextBusy(false);
   };
 
   const sendAiMessage = async () => {
@@ -1499,6 +1529,10 @@ export const MistakeDetailPanel = ({
 
     const selectedImageIds = selectedAiImageAttachmentIds.filter((id) =>
       aiImageAttachments.some((attachment) => attachment.id === id)
+    );
+    const selectedAttachmentTextIds = selectedAiAttachmentTextIds.filter((id) =>
+      selectedAiAttachmentTexts.some((item) => item.attachment.id === id) &&
+      activeAttachmentIds.has(id)
     );
     if (selectedImageIds.length > 0) {
       const imageCapabilityMessage = getAiImageCapabilityMessage();
@@ -1548,17 +1582,30 @@ export const MistakeDetailPanel = ({
       errorMessage: null,
       createdAt: now,
       updatedAt: now,
-      sources: selectedAiImageAttachments.map((attachment, index) => ({
-        id: `local-source-${now}-${index}`,
-        messageId: `local-user-${now}`,
-        sourceKind: "imageAttachment",
-        attachmentId: attachment.id,
-        originalName: attachment.originalName,
-        mimeType: attachment.mimeType || null,
-        ext: attachment.ext || normalizeAttachmentExt(attachment),
-        size: attachment.size,
-        field: attachment.field
-      }))
+      sources: [
+        ...selectedAiImageAttachments.map((attachment, index) => ({
+          id: `local-image-source-${now}-${index}`,
+          messageId: `local-user-${now}`,
+          sourceKind: "imageAttachment" as const,
+          attachmentId: attachment.id,
+          originalName: attachment.originalName,
+          mimeType: attachment.mimeType || null,
+          ext: attachment.ext || normalizeAttachmentExt(attachment),
+          size: attachment.size,
+          field: attachment.field
+        })),
+        ...selectedAiAttachmentTexts.map((item, index) => ({
+          id: `local-text-source-${now}-${index}`,
+          messageId: `local-user-${now}`,
+          sourceKind: "attachmentText" as const,
+          attachmentId: item.attachment.id,
+          originalName: item.attachment.originalName,
+          mimeType: item.attachment.mimeType || null,
+          ext: item.attachment.ext || normalizeAttachmentExt(item.attachment),
+          size: item.attachment.size,
+          field: item.attachment.field
+        }))
+      ]
     };
     const optimisticAssistantMessage: AiMessage = {
       id: `local-assistant-${now}`,
@@ -1588,7 +1635,12 @@ export const MistakeDetailPanel = ({
       const result = await mistVaultApi.extensions.ai.sessions.sendMessage(
         requestSessionId,
         content,
-        selectedImageIds.length > 0 ? { imageAttachmentIds: selectedImageIds } : undefined
+        selectedImageIds.length > 0 || selectedAttachmentTextIds.length > 0
+          ? {
+              imageAttachmentIds: selectedImageIds.length > 0 ? selectedImageIds : undefined,
+              attachmentTextIds: selectedAttachmentTextIds.length > 0 ? selectedAttachmentTextIds : undefined
+            }
+          : undefined
       );
       if (currentMistakeIdRef.current !== requestMistakeId) {
         return;
@@ -1598,6 +1650,8 @@ export const MistakeDetailPanel = ({
         setAiContextWarning(result.data.contextWarning);
         setSelectedAiImageAttachmentIds([]);
         setAiImagePickerOpen(false);
+        setSelectedAiAttachmentTextIds([]);
+        setAiAttachmentTextPickerOpen(false);
       } else {
         setAiError(aiErrorMessage(result.error.code, result.error.message));
       }
@@ -1623,19 +1677,28 @@ export const MistakeDetailPanel = ({
 
   const renderAiMessageSources = (message: AiMessage) => {
     const imageSources = message.sources.filter((source) => source.sourceKind === "imageAttachment");
-    if (imageSources.length === 0) {
+    const attachmentTextSources = message.sources.filter((source) => source.sourceKind === "attachmentText");
+    if (imageSources.length === 0 && attachmentTextSources.length === 0) {
       return null;
     }
 
     return (
       <div className="ai-message-sources">
-        <strong>本次随消息发送了 {imageSources.length} 个图片附件</strong>
+        <strong>
+          本次随消息发送了 {imageSources.length} 个图片附件
+          {attachmentTextSources.length > 0 ? `，以及 ${attachmentTextSources.length} 份附件提取文本` : ""}
+        </strong>
         <ul>
-          {imageSources.map((source) => (
+          {[...imageSources, ...attachmentTextSources].map((source) => (
             <li key={source.id}>
-              <span>{source.originalName || "图片附件"}</span>
+              <span>{source.originalName || (source.sourceKind === "attachmentText" ? "附件提取文本" : "图片附件")}</span>
               <small>
-                {[source.field, source.size !== null ? formatSize(source.size) : null, source.ext || source.mimeType]
+                {[
+                  source.field,
+                  source.sourceKind === "attachmentText" ? "附件提取文本" : null,
+                  source.size !== null ? formatSize(source.size) : null,
+                  source.ext || source.mimeType
+                ]
                   .filter(Boolean)
                   .join(" · ")}
               </small>
@@ -1808,6 +1871,17 @@ export const MistakeDetailPanel = ({
                       <div className="ai-image-attachment-tools">
                         <button
                           type="button"
+                          onClick={() => void openAiAttachmentTextPicker()}
+                          disabled={!activeSession || aiSending || aiAttachmentTextLoading}
+                          title="选择当前错题已成功提取的附件文本，随本次消息发送"
+                        >
+                          {aiAttachmentTextLoading ? "正在读取提取文本..." : "添加附件提取文本 / OCR 文本"}
+                        </button>
+                        {selectedAiAttachmentTexts.length > 0 ? (
+                          <span>已选 {selectedAiAttachmentTexts.length} 份提取文本</span>
+                        ) : null}
+                        <button
+                          type="button"
                           onClick={() => setAiImagePickerOpen((current) => !current)}
                           disabled={!activeSession || aiSending || Boolean(imageCapabilityMessage)}
                           title={imageCapabilityMessage ?? "选择图片附件给 AI 分析"}
@@ -1829,25 +1903,45 @@ export const MistakeDetailPanel = ({
                     {imageCapabilityMessage ? (
                       <p className="state-text compact-state state-warning">{imageCapabilityMessage}</p>
                     ) : null}
-                    {imageInputUnsupported && aiImageAttachments.length > 0 ? (
-                      <div className="ai-image-text-fallback">
-                        {aiImageTextStatus === "checking" ? (
-                          <p className="state-text compact-state">正在检查图片附件的 OCR / 文本提取结果...</p>
+                    {aiAttachmentTextPickerOpen ? (
+                      <div className="ai-image-picker" aria-label="选择附件提取文本">
+                        <p className="state-text compact-state">
+                          仅列出当前错题中已成功提取的文本。所选文本只随本次消息发送，AI 看到的是 OCR / 文本提取结果，不是原文件。
+                        </p>
+                        {!aiAttachmentTextLoading && aiAttachmentTextItems.length === 0 ? (
+                          <p className="state-text compact-state">没有可用的提取文本，请先在附件区域完成 OCR / 文本提取。</p>
                         ) : null}
-                        {aiImageTextStatus === "hasText" ? (
-                          <button
-                            type="button"
-                            onClick={() => void appendImageExtractedTextToAiInput()}
-                            disabled={aiSending || aiImageTextBusy}
-                          >
-                            {aiImageTextBusy ? "正在加入提取文本..." : "改用提取文本追问"}
+                        {aiAttachmentTextItems.map((item) => {
+                          const checked = selectedAiAttachmentTextIds.includes(item.attachment.id);
+                          return (
+                            <label key={item.attachment.id} className="ai-image-option">
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                disabled={aiSending || aiAttachmentTextLoading}
+                                onChange={() => toggleAiAttachmentText(item.attachment.id)}
+                              />
+                              <span>
+                                <strong>{item.attachment.originalName}</strong>
+                                <small>
+                                  {[
+                                    item.attachment.field,
+                                    item.sourceType === "ocr" ? "OCR" : "文本提取",
+                                    `${item.textLength} 字`,
+                                    item.isEdited ? "已编辑" : null
+                                  ]
+                                    .filter(Boolean)
+                                    .join(" · ")}
+                                </small>
+                              </span>
+                            </label>
+                          );
+                        })}
+                        <div className="ai-composer-actions">
+                          <button type="button" onClick={() => setAiAttachmentTextPickerOpen(false)} disabled={aiSending}>
+                            完成选择
                           </button>
-                        ) : null}
-                        {aiImageTextStatus === "none" ? (
-                          <p className="state-text compact-state">
-                            请先对附件进行 OCR / 文本提取，再将提取文本发送给 AI。
-                          </p>
-                        ) : null}
+                        </div>
                       </div>
                     ) : null}
                     {selectedAiImageAttachments.length > 0 ? (

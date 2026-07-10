@@ -47,6 +47,12 @@ export type AttachmentExtractedTextForAi = {
   extractedText: string;
 };
 
+export type SelectedAttachmentExtractedTextForAi = AttachmentExtractedTextForAi & {
+  attachmentId: string;
+  sourceType: AttachmentTextCache["sourceType"];
+  isEdited: boolean;
+};
+
 const mapAttachmentTextCache = (row: AttachmentTextCacheRow): AttachmentTextCache => ({
   attachmentId: row.attachment_id,
   originalName: row.original_name,
@@ -164,6 +170,52 @@ export class AttachmentTextCacheRepository {
       field: row.field,
       originalName: row.original_name,
       extractedText: row.extracted_text
+    }));
+  }
+
+  listSuccessfulTextsForAiSession(
+    mistakeId: string,
+    attachmentIds: string[]
+  ): SelectedAttachmentExtractedTextForAi[] {
+    if (attachmentIds.length === 0) {
+      return [];
+    }
+
+    const placeholders = attachmentIds.map(() => "?").join(", ");
+    return this.adapter.all<{
+      attachment_id: string;
+      field: Attachment["field"];
+      original_name: string;
+      source_type: AttachmentTextCache["sourceType"];
+      extracted_text: string;
+      is_edited: number;
+    }>(
+      `
+        SELECT
+          c.attachment_id,
+          a.field,
+          a.original_name,
+          c.source_type,
+          c.extracted_text,
+          c.is_edited
+        FROM attachment_text_cache c
+        INNER JOIN attachments a
+          ON a.id = c.attachment_id
+        WHERE a.mistake_id = ?
+          AND a.deleted_at IS NULL
+          AND c.extraction_status = 'success'
+          AND TRIM(c.extracted_text) <> ''
+          AND c.attachment_id IN (${placeholders})
+        ORDER BY a.created_at, a.original_name
+      `,
+      [mistakeId, ...attachmentIds]
+    ).map((row) => ({
+      attachmentId: row.attachment_id,
+      field: row.field,
+      originalName: row.original_name,
+      sourceType: row.source_type,
+      extractedText: row.extracted_text,
+      isEdited: row.is_edited === 1
     }));
   }
 }

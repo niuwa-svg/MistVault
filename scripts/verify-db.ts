@@ -446,7 +446,8 @@ const attachment = assertOk(
     mimeType: "image/png",
     ext: ".png",
     relativePath: "attachments/question-stored.png",
-    size: questionImageBytes.length
+    size: questionImageBytes.length,
+    hash: "secret-attachment-hash"
   })
 );
 assert(attachment.relativePath === "attachments/question-stored.png", "Attachment metadata failed.");
@@ -466,6 +467,26 @@ const textAttachment = assertOk(
     relativePath: "attachments/note-stored.txt",
     size: 10
   })
+);
+const editedOcrAttachmentText = assertOk(
+  services.attachmentTextExtractionService.updateExtractedText(
+    attachment.id,
+    "OCR ORIGINAL TEXT - 2 + 2 = 4\nC:\\private\\question.png\ndata:image/png;base64,abcdefghijklmnopqrstuvwxyz0123456789"
+  )
+);
+assert(
+  editedOcrAttachmentText.isEdited && editedOcrAttachmentText.sourceType === "ocr",
+  "Edited image extraction should keep its OCR source type."
+);
+const editedAttachmentText = assertOk(
+  services.attachmentTextExtractionService.updateExtractedText(
+    textAttachment.id,
+    "EDITED TEXT LAYER - use the corrected explanation"
+  )
+);
+assert(
+  editedAttachmentText.isEdited && editedAttachmentText.sourceType === "text",
+  "Edited text-layer extraction should persist as the current attachment text."
 );
 const otherMistakeForAttachment = assertOk(
   services.mistakeService.create({
@@ -840,6 +861,37 @@ assert(firstRequestText.includes("请继续讲解这道题。"), "AI prompt shou
 assert(!firstRequestText.includes("question-stored.png"), "AI prompt must not include stored attachment names.");
 assert(!firstRequestText.includes("attachments/"), "AI prompt must not include attachment relative paths.");
 assert(!firstRequestText.includes("secret-api-key"), "AI prompt must not include API key.");
+assert(!firstRequestText.includes("OCR ORIGINAL TEXT"), "Unselected attachment OCR text must not enter an AI prompt.");
+assert(!firstRequestText.includes("EDITED TEXT LAYER"), "Unselected attachment text must not enter an AI prompt.");
+
+const selectedAttachmentTextSend = assertOk(
+  await services.aiSessionService.sendMessage(createdSessions[0].id, "请根据所选附件文本分析。", {
+    attachmentTextIds: [attachment.id, textAttachment.id]
+  })
+);
+assert(
+  selectedAttachmentTextSend.userMessage.sources.filter((source) => source.sourceKind === "attachmentText").length === 2,
+  "Selected attachment texts should be recorded as safe message sources."
+);
+const selectedAttachmentTextRequest = JSON.stringify(capturedAiRequests[capturedAiRequests.length - 1]?.messages ?? []);
+assert(selectedAttachmentTextRequest.includes("【附件提取文本 / OCR 文本】"), "Selected attachment text prompt should include a clear text block.");
+assert(selectedAttachmentTextRequest.includes("OCR ORIGINAL TEXT - 2 + 2 = 4"), "Selected OCR text should enter the prompt.");
+assert(selectedAttachmentTextRequest.includes("EDITED TEXT LAYER - use the corrected explanation"), "Edited attachment text should take priority in the prompt.");
+assert(selectedAttachmentTextRequest.includes("并非 AI 直接读取原文件"), "Attachment text prompt should explain its extraction boundary.");
+assert(!selectedAttachmentTextRequest.includes("question-stored.png"), "Selected attachment text prompt must not include stored names.");
+assert(!selectedAttachmentTextRequest.includes("attachments/"), "Selected attachment text prompt must not include relative paths.");
+assert(!selectedAttachmentTextRequest.includes("data:image"), "Text-only attachment extraction prompt must not include data URLs.");
+assert(!selectedAttachmentTextRequest.includes("base64,"), "Text-only attachment extraction prompt must not include base64.");
+assert(!selectedAttachmentTextRequest.includes("C:\\private\\question.png"), "Selected attachment text prompt must not include local paths.");
+assert(!selectedAttachmentTextRequest.includes("secret-attachment-hash"), "Selected attachment text prompt must not include attachment hashes.");
+assert(
+  assertFail(
+    await services.aiSessionService.sendMessage(createdSessions[0].id, "不应读取其他错题文本", {
+      attachmentTextIds: [otherMistakeAttachment.id]
+    })
+  ) === "AI_ATTACHMENT_TEXT_UNAVAILABLE",
+  "Attachment text from another mistake must be blocked."
+);
 
 assert(
   assertFail(
@@ -896,6 +948,17 @@ const deepseekTextSend = assertOk(
   await services.aiSessionService.sendMessage(createdSessions[3].id, "deepseek text only")
 );
 assert(deepseekTextSend.assistantMessage.content, "DeepSeek text-only AI session should remain available.");
+const deepseekAttachmentTextSend = assertOk(
+  await services.aiSessionService.sendMessage(createdSessions[3].id, "deepseek selected attachment text", {
+    attachmentTextIds: [textAttachment.id]
+  })
+);
+assert(deepseekAttachmentTextSend.assistantMessage.content, "DeepSeek should accept selected attachment text.");
+const deepseekAttachmentTextRequest = JSON.stringify(capturedAiRequests[capturedAiRequests.length - 1]?.messages ?? []);
+assert(
+  deepseekAttachmentTextRequest.includes("EDITED TEXT LAYER - use the corrected explanation"),
+  "DeepSeek text-only request should include selected attachment text."
+);
 const beforeDeepseekImageCount = capturedAiRequests.length;
 assert(
   assertFail(
@@ -1080,7 +1143,7 @@ assert(!imageRequestText.includes("secret-api-key"), "Image prompt must not incl
 const persistedMessages = assertOk(
   services.aiSessionService.getSessionMessages(createdSessions[0].id)
 );
-assert(persistedMessages.length === 6, "AI messages should persist in the session.");
+assert(persistedMessages.length === 8, "AI messages should persist in the session.");
 assert(
   persistedMessages[0]?.seq === 1 && persistedMessages[1]?.seq === 2,
   "AI message seq should increment."

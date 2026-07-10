@@ -86,6 +86,7 @@ export const createCoreServices = (
     adapter,
     aiSessionRepository,
     attachmentsRepository,
+    attachmentTextCacheRepository,
     settingsService,
     mistakeService,
     nodeService,
