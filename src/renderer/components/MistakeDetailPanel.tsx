@@ -866,36 +866,46 @@ export const MistakeDetailPanel = ({
       }
 
       setAiSessionsLoading(true);
-      const result = await mistVaultApi.extensions.ai.sessions.listSessions(requestMistakeId);
-      if (!active || aiRequestSeq.current !== requestSeq || currentMistakeIdRef.current !== requestMistakeId) {
-        return;
-      }
-
-      if (result.ok) {
-        setAiSessions(result.data);
-        const nextActiveSessionId = result.data[0]?.id ?? null;
-        setActiveAiSessionId(nextActiveSessionId);
-        if (nextActiveSessionId) {
-          setAiMessagesLoading(true);
-          const messages = await mistVaultApi.extensions.ai.sessions.getSessionMessages(nextActiveSessionId);
-          if (!active || aiRequestSeq.current !== requestSeq || currentMistakeIdRef.current !== requestMistakeId) {
-            return;
-          }
-          if (messages.ok) {
-            setAiMessages(messages.data);
-          } else {
-            setAiMessages([]);
-            setAiError(aiErrorMessage(messages.error.code, messages.error.message));
-          }
-          setAiMessagesLoading(false);
+      try {
+        const result = await mistVaultApi.extensions.ai.sessions.listSessions(requestMistakeId);
+        if (!active || aiRequestSeq.current !== requestSeq || currentMistakeIdRef.current !== requestMistakeId) {
+          return;
         }
-      } else {
-        setAiSessions([]);
-        setActiveAiSessionId(null);
-        setAiMessages([]);
-        setAiError(aiErrorMessage(result.error.code, result.error.message));
+
+        if (result.ok) {
+          setAiSessions(result.data);
+          const nextActiveSessionId = result.data[0]?.id ?? null;
+          setActiveAiSessionId(nextActiveSessionId);
+          if (nextActiveSessionId) {
+            setAiMessagesLoading(true);
+            try {
+              const messages = await mistVaultApi.extensions.ai.sessions.getSessionMessages(nextActiveSessionId);
+              if (!active || aiRequestSeq.current !== requestSeq || currentMistakeIdRef.current !== requestMistakeId) {
+                return;
+              }
+              if (messages.ok) {
+                setAiMessages(messages.data);
+              } else {
+                setAiMessages([]);
+                setAiError(aiErrorMessage(messages.error.code, messages.error.message));
+              }
+            } finally {
+              if (active && aiRequestSeq.current === requestSeq && currentMistakeIdRef.current === requestMistakeId) {
+                setAiMessagesLoading(false);
+              }
+            }
+          }
+        } else {
+          setAiSessions([]);
+          setActiveAiSessionId(null);
+          setAiMessages([]);
+          setAiError(aiErrorMessage(result.error.code, result.error.message));
+        }
+      } finally {
+        if (active && aiRequestSeq.current === requestSeq && currentMistakeIdRef.current === requestMistakeId) {
+          setAiSessionsLoading(false);
+        }
       }
-      setAiSessionsLoading(false);
     };
 
     if (mistake && mode === "view") {
@@ -1264,19 +1274,25 @@ export const MistakeDetailPanel = ({
   };
 
   const loadAiMessagesForSession = async (sessionId: string) => {
+    const requestMistakeId = mistake?.id ?? null;
     setAiMessagesLoading(true);
     setAiError(null);
-    const result = await mistVaultApi.extensions.ai.sessions.getSessionMessages(sessionId);
-    if (currentMistakeIdRef.current !== (mistake?.id ?? null)) {
-      return;
-    }
+    try {
+      const result = await mistVaultApi.extensions.ai.sessions.getSessionMessages(sessionId);
+      if (currentMistakeIdRef.current !== requestMistakeId) {
+        return;
+      }
 
-    if (result.ok) {
-      setAiMessages(result.data);
-    } else {
-      setAiError(aiErrorMessage(result.error.code, result.error.message));
+      if (result.ok) {
+        setAiMessages(result.data);
+      } else {
+        setAiError(aiErrorMessage(result.error.code, result.error.message));
+      }
+    } finally {
+      if (currentMistakeIdRef.current === requestMistakeId) {
+        setAiMessagesLoading(false);
+      }
     }
-    setAiMessagesLoading(false);
   };
 
   const refreshAiSessions = async (preferredSessionId?: string | null): Promise<AiSession[]> => {
@@ -1284,28 +1300,33 @@ export const MistakeDetailPanel = ({
       return [];
     }
 
+    const requestMistakeId = mistake.id;
     setAiSessionsLoading(true);
-    const result = await mistVaultApi.extensions.ai.sessions.listSessions(mistake.id);
-    if (currentMistakeIdRef.current !== mistake.id) {
-      return [];
-    }
+    try {
+      const result = await mistVaultApi.extensions.ai.sessions.listSessions(requestMistakeId);
+      if (currentMistakeIdRef.current !== requestMistakeId) {
+        return [];
+      }
 
-    if (!result.ok) {
-      setAiError(aiErrorMessage(result.error.code, result.error.message));
-      setAiSessions([]);
-      setActiveAiSessionId(null);
-      setAiMessages([]);
-      setAiSessionsLoading(false);
-      return [];
-    }
+      if (!result.ok) {
+        setAiError(aiErrorMessage(result.error.code, result.error.message));
+        setAiSessions([]);
+        setActiveAiSessionId(null);
+        setAiMessages([]);
+        return [];
+      }
 
-    const sessions = result.data;
-    const nextActiveSessionId =
-      sessions.find((session) => session.id === preferredSessionId)?.id ?? sessions[0]?.id ?? null;
-    setAiSessions(sessions);
-    setActiveAiSessionId(nextActiveSessionId);
-    setAiSessionsLoading(false);
-    return sessions;
+      const sessions = result.data;
+      const nextActiveSessionId =
+        sessions.find((session) => session.id === preferredSessionId)?.id ?? sessions[0]?.id ?? null;
+      setAiSessions(sessions);
+      setActiveAiSessionId(nextActiveSessionId);
+      return sessions;
+    } finally {
+      if (currentMistakeIdRef.current === requestMistakeId) {
+        setAiSessionsLoading(false);
+      }
+    }
   };
 
   const switchAiSession = async (sessionId: string) => {
@@ -1333,22 +1354,28 @@ export const MistakeDetailPanel = ({
     setAiSessionBusy(true);
     setAiError(null);
     setAiCopyMessage(null);
-    const result = await mistVaultApi.extensions.ai.sessions.createSession(mistake.id);
-    if (currentMistakeIdRef.current !== mistake.id) {
-      return;
-    }
+    const requestMistakeId = mistake.id;
+    try {
+      const result = await mistVaultApi.extensions.ai.sessions.createSession(requestMistakeId);
+      if (currentMistakeIdRef.current !== requestMistakeId) {
+        return;
+      }
 
-    if (result.ok) {
-      await refreshAiSessions(result.data.id);
-      setAiMessages([]);
-      setSelectedAiImageAttachmentIds([]);
-      setAiImagePickerOpen(false);
-      setAiContextWarning("none");
-    } else {
-      setAiError(aiErrorMessage(result.error.code, result.error.message));
-      await refreshAiSessions(activeAiSessionId);
+      if (result.ok) {
+        await refreshAiSessions(result.data.id);
+        setAiInput("");
+        setAiMessages([]);
+        setSelectedAiImageAttachmentIds([]);
+        setAiImagePickerOpen(false);
+        setAiContextWarning("none");
+      } else {
+        setAiError(aiErrorMessage(result.error.code, result.error.message));
+      }
+    } finally {
+      if (currentMistakeIdRef.current === requestMistakeId) {
+        setAiSessionBusy(false);
+      }
     }
-    setAiSessionBusy(false);
   };
 
   const deleteAiSession = async (session: AiSession) => {
@@ -1360,26 +1387,38 @@ export const MistakeDetailPanel = ({
     setAiSessionBusy(true);
     setAiError(null);
     setAiCopyMessage(null);
-    const result = await mistVaultApi.extensions.ai.sessions.deleteSession(session.id);
-    if (currentMistakeIdRef.current !== session.mistakeId) {
-      return;
-    }
+    const requestMistakeId = session.mistakeId;
+    const previousActiveSessionId = activeAiSessionId;
+    try {
+      const result = await mistVaultApi.extensions.ai.sessions.deleteSession(session.id);
+      if (currentMistakeIdRef.current !== requestMistakeId) {
+        return;
+      }
 
-    if (!result.ok) {
-      setAiError(aiErrorMessage(result.error.code, result.error.message));
-    }
+      if (!result.ok) {
+        setAiError(aiErrorMessage(result.error.code, result.error.message));
+        return;
+      }
 
-    const sessions = await refreshAiSessions(session.id === activeAiSessionId ? null : activeAiSessionId);
-    const nextActiveSessionId =
-      sessions.find((item) => item.id === activeAiSessionId && item.id !== session.id)?.id ?? sessions[0]?.id ?? null;
-    setActiveAiSessionId(nextActiveSessionId);
-    setAiContextWarning("none");
-    if (nextActiveSessionId) {
-      await loadAiMessagesForSession(nextActiveSessionId);
-    } else {
-      setAiMessages([]);
+      const preferredSessionId = session.id === previousActiveSessionId ? null : previousActiveSessionId;
+      const sessions = await refreshAiSessions(preferredSessionId);
+      const nextActiveSessionId =
+        sessions.find((item) => item.id === preferredSessionId)?.id ?? sessions[0]?.id ?? null;
+      setActiveAiSessionId(nextActiveSessionId);
+      setAiContextWarning("none");
+      if (nextActiveSessionId) {
+        await loadAiMessagesForSession(nextActiveSessionId);
+      } else {
+        setAiMessages([]);
+        setAiInput("");
+        setSelectedAiImageAttachmentIds([]);
+        setAiImagePickerOpen(false);
+      }
+    } finally {
+      if (currentMistakeIdRef.current === requestMistakeId) {
+        setAiSessionBusy(false);
+      }
     }
-    setAiSessionBusy(false);
   };
 
   const getAiImageCapabilityMessage = (): string | null => {
@@ -1666,7 +1705,6 @@ export const MistakeDetailPanel = ({
       Boolean(activeSession) &&
       Boolean(aiStatus?.ready) &&
       !aiSending &&
-      !aiMessagesLoading &&
       aiInput.trim().length > 0 &&
       aiInput.trim().length <= maxAiUserMessageChars;
     const canCreate = !aiSessionsLoading && !aiSessionBusy && !sessionLimitReached;

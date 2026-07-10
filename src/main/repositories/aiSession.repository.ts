@@ -158,12 +158,47 @@ export class AiSessionRepository {
             AND ai_sessions.status = 'active'
             AND ai_sessions.deleted_at IS NULL
             AND mistakes.deleted_at IS NULL
-          ORDER BY ai_sessions.last_message_at DESC NULLS LAST,
-            ai_sessions.created_at DESC
+          ORDER BY ai_sessions.created_at ASC,
+            ai_sessions.rowid ASC
         `,
         [mistakeId]
       )
       .map(mapSession);
+  }
+
+  renumberActiveSessionTitles(mistakeId: string, updatedAt: string): void {
+    const sessions = this.adapter.all<{ id: string; title: string }>(
+      `
+        SELECT ai_sessions.id AS id, ai_sessions.title AS title
+        FROM ai_sessions
+        INNER JOIN mistakes ON mistakes.id = ai_sessions.mistake_id
+        WHERE ai_sessions.mistake_id = ?
+          AND ai_sessions.status = 'active'
+          AND ai_sessions.deleted_at IS NULL
+          AND mistakes.deleted_at IS NULL
+        ORDER BY ai_sessions.created_at ASC,
+          ai_sessions.rowid ASC
+      `,
+      [mistakeId]
+    );
+
+    sessions.forEach((session, index) => {
+      const nextTitle = `AI 对话 ${index + 1}`;
+      if (session.title === nextTitle) {
+        return;
+      }
+
+      this.adapter.run(
+        `
+          UPDATE ai_sessions
+          SET title = ?, updated_at = ?
+          WHERE id = ?
+            AND status = 'active'
+            AND deleted_at IS NULL
+        `,
+        [nextTitle, updatedAt, session.id]
+      );
+    });
   }
 
   countActiveSessionsByMistake(mistakeId: string): number {
@@ -193,6 +228,8 @@ export class AiSessionRepository {
       [record.id, record.mistakeId, record.title, record.createdAt, record.createdAt]
     );
 
+    this.renumberActiveSessionTitles(record.mistakeId, record.createdAt);
+
     const session = this.getActiveSessionById(record.id);
     if (!session) {
       throw new Error("AI_SESSION_NOT_FOUND_AFTER_CREATE");
@@ -217,6 +254,11 @@ export class AiSessionRepository {
   }
 
   softDeleteSession(sessionId: string, deletedAt: string): boolean {
+    const session = this.getActiveSessionById(sessionId);
+    if (!session) {
+      return false;
+    }
+
     const result = this.adapter.run(
       `
         UPDATE ai_sessions
@@ -225,6 +267,9 @@ export class AiSessionRepository {
       `,
       [deletedAt, deletedAt, sessionId]
     );
+    if (result.changes > 0) {
+      this.renumberActiveSessionTitles(session.mistakeId, deletedAt);
+    }
     return result.changes > 0;
   }
 
