@@ -710,12 +710,12 @@ button:disabled {
   z-index: 2;
 }
 
-.ai-message-composer label {
+.ai-composer-label {
   display: grid;
   gap: 6px;
 }
 
-.ai-message-composer label span {
+.ai-composer-label > span {
   color: var(--muted);
   font-size: 13px;
 }

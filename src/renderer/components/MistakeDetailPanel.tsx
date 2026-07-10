@@ -188,17 +188,23 @@ const AiComposer = ({ sessionId, sending, canAttemptSend, onSend, children }: Ai
         onSend(content);
       }}
     >
-      <label>
+      <div className="ai-composer-label">
         <span>继续追问</span>
         <div
           ref={editorRef}
           className="ai-composer-editor"
           contentEditable={Boolean(sessionId)}
+          tabIndex={sessionId ? 0 : -1}
           role="textbox"
           aria-multiline="true"
           aria-label="输入你想继续追问的内容"
           data-placeholder="输入你想继续追问的内容"
           suppressContentEditableWarning
+          onMouseDown={(event) => {
+            if (sessionId) {
+              event.currentTarget.focus({ preventScroll: true });
+            }
+          }}
           onInput={(event) => {
             const editor = event.currentTarget;
             const text = editor.innerText.replace(/\r/g, "");
@@ -211,7 +217,7 @@ const AiComposer = ({ sessionId, sending, canAttemptSend, onSend, children }: Ai
             setDraftLength(text.length);
           }}
         />
-      </label>
+      </div>
       <div className="ai-composer-actions">
         <span>{draftLength}/{maxAiUserMessageChars}</span>
         {children}
