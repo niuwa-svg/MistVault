@@ -705,6 +705,9 @@ export const MistakeDetailPanel = ({
   const [aiSessionBusy, setAiSessionBusy] = useState(false);
   const [aiSending, setAiSending] = useState(false);
   const aiRequestSeq = useRef(0);
+  const aiSessionListRequestSeq = useRef(0);
+  const aiMessageRequestSeq = useRef(0);
+  const activeAiSessionIdRef = useRef<string | null>(null);
   const currentMistakeIdRef = useRef<string | null>(null);
 
   const editing = mode === "create" || mode === "edit";
@@ -736,6 +739,29 @@ export const MistakeDetailPanel = ({
         .filter((attachment): attachment is Attachment => Boolean(attachment)),
     [aiImageAttachments, selectedAiImageAttachmentIds]
   );
+  const setActiveAiSession = (sessionId: string | null) => {
+    activeAiSessionIdRef.current = sessionId;
+    setActiveAiSessionId(sessionId);
+  };
+  const nextAiSessionListRequest = () => {
+    aiSessionListRequestSeq.current += 1;
+    return aiSessionListRequestSeq.current;
+  };
+  const isCurrentAiSessionListRequest = (requestId: number, mistakeId: string | null) =>
+    aiSessionListRequestSeq.current === requestId &&
+    currentMistakeIdRef.current === mistakeId;
+  const nextAiMessageRequest = () => {
+    aiMessageRequestSeq.current += 1;
+    return aiMessageRequestSeq.current;
+  };
+  const isCurrentAiMessageRequest = (
+    requestId: number,
+    mistakeId: string | null,
+    sessionId: string
+  ) =>
+    aiMessageRequestSeq.current === requestId &&
+    currentMistakeIdRef.current === mistakeId &&
+    activeAiSessionIdRef.current === sessionId;
 
   useEffect(() => {
     if (mode === "create") {
@@ -819,8 +845,10 @@ export const MistakeDetailPanel = ({
   useEffect(() => {
     currentMistakeIdRef.current = mistake?.id ?? null;
     aiRequestSeq.current += 1;
+    aiSessionListRequestSeq.current += 1;
+    aiMessageRequestSeq.current += 1;
     setAiSessions([]);
-    setActiveAiSessionId(null);
+    setActiveAiSession(null);
     setAiMessages([]);
     setAiInput("");
     setSelectedAiImageAttachmentIds([]);
@@ -865,22 +893,32 @@ export const MistakeDetailPanel = ({
         return;
       }
 
+      const sessionListRequestId = nextAiSessionListRequest();
       setAiSessionsLoading(true);
       try {
         const result = await mistVaultApi.extensions.ai.sessions.listSessions(requestMistakeId);
-        if (!active || aiRequestSeq.current !== requestSeq || currentMistakeIdRef.current !== requestMistakeId) {
+        if (
+          !active ||
+          aiRequestSeq.current !== requestSeq ||
+          !isCurrentAiSessionListRequest(sessionListRequestId, requestMistakeId)
+        ) {
           return;
         }
 
         if (result.ok) {
           setAiSessions(result.data);
           const nextActiveSessionId = result.data[0]?.id ?? null;
-          setActiveAiSessionId(nextActiveSessionId);
+          setActiveAiSession(nextActiveSessionId);
           if (nextActiveSessionId) {
+            const messageRequestId = nextAiMessageRequest();
             setAiMessagesLoading(true);
             try {
               const messages = await mistVaultApi.extensions.ai.sessions.getSessionMessages(nextActiveSessionId);
-              if (!active || aiRequestSeq.current !== requestSeq || currentMistakeIdRef.current !== requestMistakeId) {
+              if (
+                !active ||
+                aiRequestSeq.current !== requestSeq ||
+                !isCurrentAiMessageRequest(messageRequestId, requestMistakeId, nextActiveSessionId)
+              ) {
                 return;
               }
               if (messages.ok) {
@@ -890,19 +928,27 @@ export const MistakeDetailPanel = ({
                 setAiError(aiErrorMessage(messages.error.code, messages.error.message));
               }
             } finally {
-              if (active && aiRequestSeq.current === requestSeq && currentMistakeIdRef.current === requestMistakeId) {
+              if (
+                active &&
+                aiRequestSeq.current === requestSeq &&
+                isCurrentAiMessageRequest(messageRequestId, requestMistakeId, nextActiveSessionId)
+              ) {
                 setAiMessagesLoading(false);
               }
             }
           }
         } else {
           setAiSessions([]);
-          setActiveAiSessionId(null);
+          setActiveAiSession(null);
           setAiMessages([]);
           setAiError(aiErrorMessage(result.error.code, result.error.message));
         }
       } finally {
-        if (active && aiRequestSeq.current === requestSeq && currentMistakeIdRef.current === requestMistakeId) {
+        if (
+          active &&
+          aiRequestSeq.current === requestSeq &&
+          isCurrentAiSessionListRequest(sessionListRequestId, requestMistakeId)
+        ) {
           setAiSessionsLoading(false);
         }
       }
@@ -923,6 +969,38 @@ export const MistakeDetailPanel = ({
   useEffect(() => {
     setMoveTargetId(nodeOptions.find((node) => node.id !== mistake?.nodeId)?.id ?? "");
   }, [mistake?.nodeId, nodeOptions]);
+
+  useEffect(() => {
+    if (!import.meta.env.DEV || mode !== "view" || !mistake) {
+      return;
+    }
+
+    const activeSessionExists = activeAiSessionId
+      ? aiSessions.some((session) => session.id === activeAiSessionId)
+      : false;
+    console.debug("[AI composer]", {
+      activeAiSessionId,
+      activeSessionExists,
+      aiSessions: aiSessions.map((session) => ({ id: session.id, title: session.title })),
+      aiInputLength: aiInput.length,
+      textareaDisabled: !activeAiSessionId,
+      aiSessionsLoading,
+      aiMessagesLoading,
+      aiSessionBusy,
+      aiSending,
+      currentMistakeId: mistake.id
+    });
+  }, [
+    activeAiSessionId,
+    aiInput.length,
+    aiMessagesLoading,
+    aiSending,
+    aiSessionBusy,
+    aiSessions,
+    aiSessionsLoading,
+    mistake,
+    mode
+  ]);
 
   useEffect(() => {
     if (!mistake?.nodeId) {
@@ -1275,11 +1353,12 @@ export const MistakeDetailPanel = ({
 
   const loadAiMessagesForSession = async (sessionId: string) => {
     const requestMistakeId = mistake?.id ?? null;
+    const messageRequestId = nextAiMessageRequest();
     setAiMessagesLoading(true);
     setAiError(null);
     try {
       const result = await mistVaultApi.extensions.ai.sessions.getSessionMessages(sessionId);
-      if (currentMistakeIdRef.current !== requestMistakeId) {
+      if (!isCurrentAiMessageRequest(messageRequestId, requestMistakeId, sessionId)) {
         return;
       }
 
@@ -1289,29 +1368,30 @@ export const MistakeDetailPanel = ({
         setAiError(aiErrorMessage(result.error.code, result.error.message));
       }
     } finally {
-      if (currentMistakeIdRef.current === requestMistakeId) {
+      if (isCurrentAiMessageRequest(messageRequestId, requestMistakeId, sessionId)) {
         setAiMessagesLoading(false);
       }
     }
   };
 
-  const refreshAiSessions = async (preferredSessionId?: string | null): Promise<AiSession[]> => {
+  const refreshAiSessions = async (preferredSessionId?: string | null): Promise<AiSession[] | null> => {
     if (!mistake) {
-      return [];
+      return null;
     }
 
     const requestMistakeId = mistake.id;
+    const sessionListRequestId = nextAiSessionListRequest();
     setAiSessionsLoading(true);
     try {
       const result = await mistVaultApi.extensions.ai.sessions.listSessions(requestMistakeId);
-      if (currentMistakeIdRef.current !== requestMistakeId) {
-        return [];
+      if (!isCurrentAiSessionListRequest(sessionListRequestId, requestMistakeId)) {
+        return null;
       }
 
       if (!result.ok) {
         setAiError(aiErrorMessage(result.error.code, result.error.message));
         setAiSessions([]);
-        setActiveAiSessionId(null);
+        setActiveAiSession(null);
         setAiMessages([]);
         return [];
       }
@@ -1320,10 +1400,10 @@ export const MistakeDetailPanel = ({
       const nextActiveSessionId =
         sessions.find((session) => session.id === preferredSessionId)?.id ?? sessions[0]?.id ?? null;
       setAiSessions(sessions);
-      setActiveAiSessionId(nextActiveSessionId);
+      setActiveAiSession(nextActiveSessionId);
       return sessions;
     } finally {
-      if (currentMistakeIdRef.current === requestMistakeId) {
+      if (isCurrentAiSessionListRequest(sessionListRequestId, requestMistakeId)) {
         setAiSessionsLoading(false);
       }
     }
@@ -1334,7 +1414,8 @@ export const MistakeDetailPanel = ({
       return;
     }
 
-    setActiveAiSessionId(sessionId);
+    aiMessageRequestSeq.current += 1;
+    setActiveAiSession(sessionId);
     setAiMessages([]);
     setAiInput("");
     setSelectedAiImageAttachmentIds([]);
@@ -1352,6 +1433,7 @@ export const MistakeDetailPanel = ({
     }
 
     setAiSessionBusy(true);
+    aiSessionListRequestSeq.current += 1;
     setAiError(null);
     setAiCopyMessage(null);
     const requestMistakeId = mistake.id;
@@ -1362,7 +1444,10 @@ export const MistakeDetailPanel = ({
       }
 
       if (result.ok) {
-        await refreshAiSessions(result.data.id);
+        const sessions = await refreshAiSessions(result.data.id);
+        if (sessions === null) {
+          return;
+        }
         setAiInput("");
         setAiMessages([]);
         setSelectedAiImageAttachmentIds([]);
@@ -1385,6 +1470,8 @@ export const MistakeDetailPanel = ({
     }
 
     setAiSessionBusy(true);
+    aiSessionListRequestSeq.current += 1;
+    aiMessageRequestSeq.current += 1;
     setAiError(null);
     setAiCopyMessage(null);
     const requestMistakeId = session.mistakeId;
@@ -1402,9 +1489,12 @@ export const MistakeDetailPanel = ({
 
       const preferredSessionId = session.id === previousActiveSessionId ? null : previousActiveSessionId;
       const sessions = await refreshAiSessions(preferredSessionId);
+      if (sessions === null) {
+        return;
+      }
       const nextActiveSessionId =
         sessions.find((item) => item.id === preferredSessionId)?.id ?? sessions[0]?.id ?? null;
-      setActiveAiSessionId(nextActiveSessionId);
+      setActiveAiSession(nextActiveSessionId);
       setAiContextWarning("none");
       if (nextActiveSessionId) {
         await loadAiMessagesForSession(nextActiveSessionId);
@@ -1701,8 +1791,10 @@ export const MistakeDetailPanel = ({
       Boolean(aiStatus?.ready) &&
       Boolean(currentAiImageCapability) &&
       !currentAiImageCapability?.supportsImageInput;
+    const activeSessionReady = Boolean(activeSession);
+    const textareaDisabled = !activeAiSessionId;
     const canSend =
-      Boolean(activeSession) &&
+      Boolean(activeAiSessionId) &&
       Boolean(aiStatus?.ready) &&
       !aiSending &&
       aiInput.trim().length > 0 &&
@@ -1770,21 +1862,30 @@ export const MistakeDetailPanel = ({
             </aside>
 
             <section className="ai-conversation-panel" aria-label="AI 会话消息">
-              {activeSession ? (
+              {activeAiSessionId ? (
                 <>
                   <div className="ai-conversation-head">
                     <div>
-                      <strong>{activeSession.title}</strong>
-                      <span>{activeSession.lastMessageAt ? `最后消息：${formatDate(activeSession.lastMessageAt)}` : "尚未发送消息"}</span>
+                      <strong>{activeSession?.title ?? "会话状态刷新中"}</strong>
+                      <span>
+                        {activeSession?.lastMessageAt
+                          ? `最后消息：${formatDate(activeSession.lastMessageAt)}`
+                          : activeSessionReady
+                            ? "尚未发送消息"
+                            : "正在同步会话状态"}
+                      </span>
                     </div>
                     <button
                       type="button"
-                      onClick={() => void loadAiMessagesForSession(activeSession.id)}
-                      disabled={aiMessagesLoading || aiSending}
+                      onClick={() => void loadAiMessagesForSession(activeAiSessionId)}
+                      disabled={!activeSessionReady || aiMessagesLoading || aiSending}
                     >
                       刷新
                     </button>
                   </div>
+                  {!activeSessionReady ? (
+                    <p className="state-text compact-state">会话状态刷新中，输入草稿不会受影响。</p>
+                  ) : null}
                   {aiMessagesLoading ? <p className="state-text compact-state">正在加载消息...</p> : null}
                   {!aiMessagesLoading && aiMessages.length === 0 ? (
                     <p className="state-text compact-state">这个会话还没有消息。输入一个追问开始对话。</p>
@@ -1836,7 +1937,7 @@ export const MistakeDetailPanel = ({
                         }}
                         maxLength={maxAiUserMessageChars}
                         placeholder="输入你想继续追问的内容"
-                        disabled={!activeSession}
+                        disabled={textareaDisabled}
                       />
                     </label>
                     <div className="ai-composer-actions">
@@ -1847,7 +1948,7 @@ export const MistakeDetailPanel = ({
                         <button
                           type="button"
                           onClick={() => setAiImagePickerOpen((current) => !current)}
-                          disabled={!activeSession || aiSending || Boolean(imageCapabilityMessage)}
+                          disabled={!activeAiSessionId || aiSending || Boolean(imageCapabilityMessage)}
                           title={imageCapabilityMessage ?? "选择图片附件给 AI 分析"}
                         >
                           选择图片附件给 AI 分析
