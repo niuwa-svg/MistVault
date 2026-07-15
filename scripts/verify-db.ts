@@ -483,6 +483,12 @@ assert(chineseCacheRow?.extracted_text === chineseOcrSample, "Chinese OCR text w
 assertOk(services.attachmentTextExtractionService.clearExtractedText(textAttachment.id));
 assertOk(
   services.attachmentTextExtractionService.updateExtractedText(
+    attachment.id,
+    `${chineseOcrSample}\nPinned current attachment text unique.`
+  )
+);
+assertOk(
+  services.attachmentTextExtractionService.updateExtractedText(
     textAttachment.id,
     "Pinned current attachment text unique."
   )
@@ -1065,8 +1071,8 @@ assert(!firstRequestText.includes("secret-api-key"), "AI prompt must not include
 const pinnedTextSend = assertOk(
   await services.aiSessionService.sendMessage(createdSessions[2].id, "请根据固定文本解释这道题。", {
     attachmentTextIds: [
-      textAttachment.id,
-      textAttachment.id,
+      attachment.id,
+      attachment.id,
       otherMistakeTextAttachment.id,
       emptyTextAttachment.id,
       failedTextAttachment.id
@@ -1078,9 +1084,9 @@ const pinnedTextSources = pinnedTextSend.userMessage.sources.filter(
 );
 assert(pinnedTextSources.length === 1, "Attachment text ids should be filtered and deduplicated.");
 assert(
-  pinnedTextSources[0]?.attachmentId === textAttachment.id &&
-    pinnedTextSources[0]?.originalName === "note.txt" &&
-    pinnedTextSources[0]?.field === "note",
+  pinnedTextSources[0]?.attachmentId === attachment.id &&
+    pinnedTextSources[0]?.originalName === "question.png" &&
+    pinnedTextSources[0]?.field === "question",
   "Attachment text source should record only safe current-mistake metadata."
 );
 assert(pinnedTextSend.contextWarning === "none", "Short pinned text should not warn.");
@@ -1094,6 +1100,10 @@ assert(
   "Pinned attachment text prompt should include current mistake text."
 );
 assert(
+  pinnedTextRequestText.includes(chineseOcrSample),
+  "Pinned OCR text prompt should preserve Chinese UTF-8 text."
+);
+assert(
   !pinnedTextRequestText.includes("Cross mistake text must not enter prompt."),
   "Pinned attachment text prompt must not include another mistake's text."
 );
@@ -1104,12 +1114,13 @@ assert(
 assert(!pinnedTextRequestText.includes("data:image"), "Pinned text request must not include image data URLs.");
 assert(!pinnedTextRequestText.includes("image_url"), "Pinned text request must not include image parts.");
 assert(!pinnedTextRequestText.includes("note-stored.txt"), "Pinned text prompt must not include stored names.");
+assert(!pinnedTextRequestText.includes("question-stored.png"), "Pinned OCR text prompt must not include stored image names.");
 assert(!pinnedTextRequestText.includes("attachments/"), "Pinned text prompt must not include relative paths.");
 assertNoSensitiveValues(pinnedTextSend, "Pinned attachment text send DTO");
 
 assertOk(
   await services.aiSessionService.sendMessage(createdSessions[2].id, "继续详细解释第二步。", {
-    attachmentTextIds: [textAttachment.id]
+    attachmentTextIds: [attachment.id]
   })
 );
 const secondPinnedTextRequestText = JSON.stringify(capturedAiRequests[capturedAiRequests.length - 1]?.messages ?? []);
