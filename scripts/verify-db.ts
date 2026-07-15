@@ -791,13 +791,119 @@ assertOk(
   })
 );
 
+const expectedAiTitles = (count: number): string[] =>
+  Array.from({ length: count }, (_, index) => `AI 对话 ${index + 1}`);
+const assertActiveAiSessionTitles = (
+  mistakeId: string,
+  expectedTitles: string[],
+  message: string
+) => {
+  const sessions = assertOk(services.aiSessionService.listSessions(mistakeId));
+  assert(
+    sessions.length === expectedTitles.length &&
+      sessions.every((session, index) => session.title === expectedTitles[index]),
+    message
+  );
+  assert(sessions.length <= 5, `${message}: active session count exceeded five.`);
+  return sessions;
+};
+
+const numberingMistake = assertOk(
+  services.mistakeService.create({
+    nodeId: node.id,
+    question: "AI numbering mistake",
+    keywordNames: ["ai-numbering"]
+  })
+).mistake;
+const numberingFirst = assertOk(services.aiSessionService.createSession(numberingMistake.id));
+const numberingSecond = assertOk(services.aiSessionService.createSession(numberingMistake.id));
+assertActiveAiSessionTitles(
+  numberingMistake.id,
+  expectedAiTitles(2),
+  "Creating AI sessions 1 and 2 should assign continuous titles."
+);
+assertOk(services.aiSessionService.deleteSession(numberingFirst.id));
+const numberingAfterDeleteFirst = assertActiveAiSessionTitles(
+  numberingMistake.id,
+  expectedAiTitles(1),
+  "Deleting AI session 1 should renumber the old AI session 2 to AI session 1."
+);
+assert(
+  numberingAfterDeleteFirst[0]?.id === numberingSecond.id,
+  "Renumbering should keep the original session identity after deleting the first session."
+);
+const numberingReplacement = assertOk(services.aiSessionService.createSession(numberingMistake.id));
+const numberingAfterReplacement = assertActiveAiSessionTitles(
+  numberingMistake.id,
+  expectedAiTitles(2),
+  "Creating after deleting AI session 1 should not create duplicate AI session 2 titles."
+);
+assert(
+  numberingAfterReplacement[0]?.id === numberingSecond.id &&
+    numberingAfterReplacement[1]?.id === numberingReplacement.id,
+  "New AI sessions should be appended after older active sessions."
+);
+const otherNumberingMistake = assertOk(
+  services.mistakeService.create({
+    nodeId: node.id,
+    question: "Other AI numbering mistake",
+    keywordNames: ["ai-numbering-other"]
+  })
+).mistake;
+assertOk(services.aiSessionService.createSession(otherNumberingMistake.id));
+assertOk(services.aiSessionService.createSession(otherNumberingMistake.id));
+assertActiveAiSessionTitles(
+  otherNumberingMistake.id,
+  expectedAiTitles(2),
+  "Different mistakes should keep independent AI session numbering."
+);
+assertActiveAiSessionTitles(
+  numberingMistake.id,
+  expectedAiTitles(2),
+  "Renumbering another mistake should not affect this mistake."
+);
+Array.from({ length: 3 }, () => assertOk(services.aiSessionService.createSession(numberingMistake.id)));
+const numberingAtLimit = assertActiveAiSessionTitles(
+  numberingMistake.id,
+  expectedAiTitles(5),
+  "Creating up to five AI sessions should keep titles continuous from 1 to 5."
+);
+assert(
+  assertFail(services.aiSessionService.createSession(numberingMistake.id)) === "AI_SESSION_LIMIT_REACHED",
+  "Creating the sixth active AI session should be blocked without creating AI session 6."
+);
+assertActiveAiSessionTitles(
+  numberingMistake.id,
+  expectedAiTitles(5),
+  "The sixth AI session attempt should not change active session titles."
+);
+const oldFourthSessionId = numberingAtLimit[3]?.id;
+const oldFifthSessionId = numberingAtLimit[4]?.id;
+assertOk(services.aiSessionService.deleteSession(numberingAtLimit[2].id));
+const numberingAfterMiddleDelete = assertActiveAiSessionTitles(
+  numberingMistake.id,
+  expectedAiTitles(4),
+  "Deleting AI session 3 should renumber later active sessions to 3 and 4."
+);
+assert(
+  numberingAfterMiddleDelete[2]?.id === oldFourthSessionId &&
+    numberingAfterMiddleDelete[3]?.id === oldFifthSessionId,
+  "Deleting a middle AI session should preserve later session identities while renumbering titles."
+);
+assert(
+  assertFail(services.aiSessionService.getSessionMessages(numberingFirst.id)) ===
+    "AI_SESSION_MESSAGES_FAILED",
+  "Deleted AI sessions should not participate in active numbering."
+);
+
 const createdSessions = Array.from({ length: 5 }, () =>
   assertOk(services.aiSessionService.createSession(mistake.id))
 );
 assert(createdSessions.length === 5, "Should create five AI sessions for one mistake.");
+const createdSessionTitles = createdSessions.map((session) => session.title);
 assert(
-  createdSessions.every((session, index) => session.title === `AI 对话 ${index + 1}`),
-  "AI session default titles should be generated."
+  createdSessionTitles.every((title, index) => title === expectedAiTitles(5)[index]),
+  `AI session default titles should be generated: ${createdSessionTitles.join(", ")}`
 );
 assertNoSensitiveValues(createdSessions, "AI session DTO");
 
@@ -813,6 +919,10 @@ assert(
   activeSessionsAfterDelete.length === 4 &&
     !activeSessionsAfterDelete.some((session) => session.id === createdSessions[1].id),
   "Deleted AI session should not appear in active session list."
+);
+assert(
+  activeSessionsAfterDelete.every((session, index) => session.title === expectedAiTitles(4)[index]),
+  "Deleting an AI session should renumber remaining active sessions continuously."
 );
 assert(
   assertOk(services.mistakeService.get(mistake.id)).id === mistake.id,
@@ -1093,6 +1203,15 @@ assert(persistedImageUserMessage, "Persisted image user message should include i
 const persistedSerialized = JSON.stringify(persistedMessages);
 assert(!persistedSerialized.includes("data:image"), "AI messages must not persist data URLs.");
 assert(!persistedSerialized.includes(questionImageBytes.toString("base64")), "AI messages must not persist base64 image data.");
+assertOk(services.aiSessionService.deleteSession(createdSessions[3].id));
+const persistedMessagesAfterRenumber = assertOk(
+  services.aiSessionService.getSessionMessages(createdSessions[0].id)
+);
+assert(
+  persistedMessagesAfterRenumber.length === persistedMessages.length &&
+    persistedMessagesAfterRenumber.every((message, index) => message.id === persistedMessages[index]?.id),
+  "AI session title renumbering should not delete or reorder messages."
+);
 
 const longSession = activeSessionsAfterDelete[0] ?? createdSessions[0];
 let longSend = firstSend;
@@ -1168,6 +1287,8 @@ assertOk(services.mistakeService.softDelete(legacyLinkedMistake.id));
 assertOk(services.mistakeService.softDelete(deletedNodeMistake.id));
 assertOk(services.mistakeService.softDelete(childMistake.id));
 assertOk(services.mistakeService.softDelete(otherMistakeForAttachment.id));
+assertOk(services.mistakeService.softDelete(numberingMistake.id));
+assertOk(services.mistakeService.softDelete(otherNumberingMistake.id));
 assert(assertOk(services.mistakeService.list()).length === 0, "Mistake soft delete failed.");
 assertOk(services.nodeService.softDelete(childNode.id));
 assertOk(services.nodeService.softDelete(node.id));

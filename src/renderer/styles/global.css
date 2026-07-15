@@ -643,6 +643,34 @@ button:disabled {
   padding: 4px 8px;
 }
 
+.ai-delete-confirm {
+  background: var(--danger-soft);
+  border: 1px solid var(--danger);
+  border-radius: 7px;
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+}
+
+.ai-delete-confirm p {
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.ai-delete-confirm > div {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.danger-action {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
 .ai-conversation-panel {
   display: grid;
   gap: 12px;
@@ -963,6 +991,29 @@ button:disabled {
   font-size: 0.86rem;
   line-height: 1.6;
   margin: 0;
+}
+
+.attachment-clear-confirm {
+  background: var(--danger-soft);
+  border: 1px solid var(--danger);
+  border-radius: 7px;
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+}
+
+.attachment-clear-confirm p {
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.attachment-clear-confirm > div {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .attachment-extracted-text {

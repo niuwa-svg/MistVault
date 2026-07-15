@@ -1,4 +1,5 @@
 ﻿import { useEffect, useMemo, useRef, useState } from "react";
+import type { FormEvent, ReactNode } from "react";
 import type {
   AiContextWarning,
   AiExtensionStatus,
@@ -75,6 +76,21 @@ type LinkCandidate = {
 
 type LinkedPathState = Record<string, string>;
 type AiImageTextStatus = "idle" | "checking" | "hasText" | "none";
+type AiDraftAppendRequest = {
+  id: number;
+  text: string;
+};
+
+type AiSessionComposerProps = {
+  activeSessionId: string | null;
+  aiReady: boolean;
+  sending: boolean;
+  maxChars: number;
+  appendRequest?: AiDraftAppendRequest | null;
+  onSend: (content: string) => Promise<boolean> | boolean;
+  actionControls?: ReactNode;
+  children?: ReactNode;
+};
 
 const ocrTextDisclaimer = "以下内容是 OCR / 文本提取结果，不是模型直接看到的原图，可能存在识别错误。";
 
@@ -223,6 +239,77 @@ const aiErrorMessage = (code?: string | null, fallback?: string | null): string 
   return redactSensitiveText(fallback || "AI 会话请求失败，请稍后重试。");
 };
 
+const AiSessionComposer = ({
+  activeSessionId,
+  aiReady,
+  sending,
+  maxChars,
+  appendRequest,
+  onSend,
+  actionControls,
+  children
+}: AiSessionComposerProps) => {
+  const [draft, setDraft] = useState("");
+  const lastAppendRequestId = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!appendRequest || lastAppendRequestId.current === appendRequest.id) {
+      return;
+    }
+
+    lastAppendRequestId.current = appendRequest.id;
+    setDraft((current) =>
+      current.trim() ? `${current.trim()}\n\n${appendRequest.text}` : appendRequest.text
+    );
+  }, [appendRequest]);
+
+  const trimmedDraft = draft.trim();
+  const canSend =
+    Boolean(activeSessionId) &&
+    aiReady &&
+    !sending &&
+    trimmedDraft.length > 0 &&
+    trimmedDraft.length <= maxChars;
+
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!activeSessionId || !trimmedDraft) {
+      return;
+    }
+
+    const content = trimmedDraft;
+    const sent = await onSend(content);
+    if (sent) {
+      setDraft((current) => (current.trim() === content ? "" : current));
+    }
+  };
+
+  return (
+    <form className="ai-message-composer" onSubmit={(event) => void handleSubmit(event)}>
+      <label>
+        <span>继续追问</span>
+        <textarea
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          maxLength={maxChars}
+          placeholder={activeSessionId ? "输入你想继续追问的内容" : "请先创建或选择 AI 会话"}
+          disabled={!activeSessionId}
+        />
+      </label>
+      <div className="ai-composer-actions">
+        <span className={draft.length > maxChars ? "state-error" : ""}>
+          {draft.length}/{maxChars}
+        </span>
+        {actionControls}
+        <button type="submit" disabled={!canSend}>
+          {sending ? "发送中..." : "发送"}
+        </button>
+      </div>
+      {children}
+    </form>
+  );
+};
+
 const summarize = (text: string): string => {
   const normalized = text.replace(/\s+/g, " ").trim();
   return normalized.length > 90 ? `${normalized.slice(0, 90)}...` : normalized;
@@ -302,6 +389,7 @@ const AttachmentTextExtractionPanel = ({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [copyMessage, setCopyMessage] = useState<string | null>(null);
 
@@ -377,6 +465,7 @@ const AttachmentTextExtractionPanel = ({
     setDraft("");
     setMessage(null);
     setCopyMessage(null);
+    setClearConfirmOpen(false);
     setBusy(false);
 
     if (!supported) {
@@ -530,11 +619,20 @@ const AttachmentTextExtractionPanel = ({
     }
   };
 
-  const clearText = async () => {
-    const confirmed = window.confirm("确定清除该附件的提取文本吗？原附件文件不会被删除。");
-    if (!confirmed) {
+  const requestClearText = () => {
+    if (busy) {
       return;
     }
+    setClearConfirmOpen(true);
+    setMessage(null);
+    setCopyMessage(null);
+  };
+
+  const confirmClearText = async () => {
+    if (busy) {
+      return;
+    }
+    setClearConfirmOpen(false);
     setBusy(true);
     setMessage(null);
     const cleared = await mistVaultApi.extensions.extraction.clearExtractedText(attachmentId);
@@ -598,7 +696,7 @@ const AttachmentTextExtractionPanel = ({
             <button type="button" onClick={() => void extract(true)} disabled={busy}>
               重新提取
             </button>
-            <button type="button" onClick={() => void clearText()} disabled={busy}>
+            <button type="button" onClick={requestClearText} disabled={busy}>
               清除提取文本
             </button>
           </>
@@ -609,6 +707,19 @@ const AttachmentTextExtractionPanel = ({
           </button>
         ) : null}
       </div>
+      {clearConfirmOpen ? (
+        <div className="attachment-clear-confirm" role="dialog" aria-modal="true" aria-label="清除提取文本确认">
+          <p>确定清除该附件的提取文本吗？原附件文件不会被删除。</p>
+          <div>
+            <button type="button" className="danger-action" onClick={() => void confirmClearText()} disabled={busy}>
+              确定清除
+            </button>
+            <button type="button" onClick={() => setClearConfirmOpen(false)} disabled={busy}>
+              取消
+            </button>
+          </div>
+        </div>
+      ) : null}
       {message ? <p className="state-text compact-state state-warning">{message}</p> : null}
       {copyMessage ? <p className="state-text compact-state">{copyMessage}</p> : null}
       {expanded && result ? (
@@ -692,11 +803,12 @@ export const MistakeDetailPanel = ({
   const [aiSessions, setAiSessions] = useState<AiSession[]>([]);
   const [activeAiSessionId, setActiveAiSessionId] = useState<string | null>(null);
   const [aiMessages, setAiMessages] = useState<AiMessage[]>([]);
-  const [aiInput, setAiInput] = useState("");
+  const [aiDraftAppendRequest, setAiDraftAppendRequest] = useState<AiDraftAppendRequest | null>(null);
   const [selectedAiImageAttachmentIds, setSelectedAiImageAttachmentIds] = useState<string[]>([]);
   const [aiImagePickerOpen, setAiImagePickerOpen] = useState(false);
   const [aiImageTextStatus, setAiImageTextStatus] = useState<AiImageTextStatus>("idle");
   const [aiImageTextBusy, setAiImageTextBusy] = useState(false);
+  const [pendingDeleteAiSession, setPendingDeleteAiSession] = useState<AiSession | null>(null);
   const [aiError, setAiError] = useState<string | null>(null);
   const [aiCopyMessage, setAiCopyMessage] = useState<string | null>(null);
   const [aiContextWarning, setAiContextWarning] = useState<AiContextWarning>("none");
@@ -705,7 +817,11 @@ export const MistakeDetailPanel = ({
   const [aiSessionBusy, setAiSessionBusy] = useState(false);
   const [aiSending, setAiSending] = useState(false);
   const aiRequestSeq = useRef(0);
+  const aiSessionListRequestSeq = useRef(0);
+  const aiMessageRequestSeq = useRef(0);
+  const activeAiSessionIdRef = useRef<string | null>(null);
   const currentMistakeIdRef = useRef<string | null>(null);
+  const aiDraftAppendSeq = useRef(0);
 
   const editing = mode === "create" || mode === "edit";
   const groupedAttachments = useMemo(() => {
@@ -736,6 +852,29 @@ export const MistakeDetailPanel = ({
         .filter((attachment): attachment is Attachment => Boolean(attachment)),
     [aiImageAttachments, selectedAiImageAttachmentIds]
   );
+  const setActiveAiSession = (sessionId: string | null) => {
+    activeAiSessionIdRef.current = sessionId;
+    setActiveAiSessionId(sessionId);
+  };
+  const nextAiSessionListRequest = () => {
+    aiSessionListRequestSeq.current += 1;
+    return aiSessionListRequestSeq.current;
+  };
+  const isCurrentAiSessionListRequest = (requestId: number, mistakeId: string | null) =>
+    aiSessionListRequestSeq.current === requestId &&
+    currentMistakeIdRef.current === mistakeId;
+  const nextAiMessageRequest = () => {
+    aiMessageRequestSeq.current += 1;
+    return aiMessageRequestSeq.current;
+  };
+  const isCurrentAiMessageRequest = (
+    requestId: number,
+    mistakeId: string | null,
+    sessionId: string
+  ) =>
+    aiMessageRequestSeq.current === requestId &&
+    currentMistakeIdRef.current === mistakeId &&
+    activeAiSessionIdRef.current === sessionId;
 
   useEffect(() => {
     if (mode === "create") {
@@ -819,12 +958,15 @@ export const MistakeDetailPanel = ({
   useEffect(() => {
     currentMistakeIdRef.current = mistake?.id ?? null;
     aiRequestSeq.current += 1;
+    aiSessionListRequestSeq.current += 1;
+    aiMessageRequestSeq.current += 1;
     setAiSessions([]);
-    setActiveAiSessionId(null);
+    setActiveAiSession(null);
     setAiMessages([]);
-    setAiInput("");
+    setAiDraftAppendRequest(null);
     setSelectedAiImageAttachmentIds([]);
     setAiImagePickerOpen(false);
+    setPendingDeleteAiSession(null);
     setAiImageTextStatus("idle");
     setAiImageTextBusy(false);
     setAiError(null);
@@ -865,37 +1007,65 @@ export const MistakeDetailPanel = ({
         return;
       }
 
+      const sessionListRequestId = nextAiSessionListRequest();
       setAiSessionsLoading(true);
-      const result = await mistVaultApi.extensions.ai.sessions.listSessions(requestMistakeId);
-      if (!active || aiRequestSeq.current !== requestSeq || currentMistakeIdRef.current !== requestMistakeId) {
-        return;
-      }
-
-      if (result.ok) {
-        setAiSessions(result.data);
-        const nextActiveSessionId = result.data[0]?.id ?? null;
-        setActiveAiSessionId(nextActiveSessionId);
-        if (nextActiveSessionId) {
-          setAiMessagesLoading(true);
-          const messages = await mistVaultApi.extensions.ai.sessions.getSessionMessages(nextActiveSessionId);
-          if (!active || aiRequestSeq.current !== requestSeq || currentMistakeIdRef.current !== requestMistakeId) {
-            return;
-          }
-          if (messages.ok) {
-            setAiMessages(messages.data);
-          } else {
-            setAiMessages([]);
-            setAiError(aiErrorMessage(messages.error.code, messages.error.message));
-          }
-          setAiMessagesLoading(false);
+      try {
+        const result = await mistVaultApi.extensions.ai.sessions.listSessions(requestMistakeId);
+        if (
+          !active ||
+          aiRequestSeq.current !== requestSeq ||
+          !isCurrentAiSessionListRequest(sessionListRequestId, requestMistakeId)
+        ) {
+          return;
         }
-      } else {
-        setAiSessions([]);
-        setActiveAiSessionId(null);
-        setAiMessages([]);
-        setAiError(aiErrorMessage(result.error.code, result.error.message));
+
+        if (result.ok) {
+          setAiSessions(result.data);
+          const nextActiveSessionId = result.data[0]?.id ?? null;
+          setActiveAiSession(nextActiveSessionId);
+          if (nextActiveSessionId) {
+            const messageRequestId = nextAiMessageRequest();
+            setAiMessagesLoading(true);
+            try {
+              const messages = await mistVaultApi.extensions.ai.sessions.getSessionMessages(nextActiveSessionId);
+              if (
+                !active ||
+                aiRequestSeq.current !== requestSeq ||
+                !isCurrentAiMessageRequest(messageRequestId, requestMistakeId, nextActiveSessionId)
+              ) {
+                return;
+              }
+              if (messages.ok) {
+                setAiMessages(messages.data);
+              } else {
+                setAiMessages([]);
+                setAiError(aiErrorMessage(messages.error.code, messages.error.message));
+              }
+            } finally {
+              if (
+                active &&
+                aiRequestSeq.current === requestSeq &&
+                isCurrentAiMessageRequest(messageRequestId, requestMistakeId, nextActiveSessionId)
+              ) {
+                setAiMessagesLoading(false);
+              }
+            }
+          }
+        } else {
+          setAiSessions([]);
+          setActiveAiSession(null);
+          setAiMessages([]);
+          setAiError(aiErrorMessage(result.error.code, result.error.message));
+        }
+      } finally {
+        if (
+          active &&
+          aiRequestSeq.current === requestSeq &&
+          isCurrentAiSessionListRequest(sessionListRequestId, requestMistakeId)
+        ) {
+          setAiSessionsLoading(false);
+        }
       }
-      setAiSessionsLoading(false);
     };
 
     if (mistake && mode === "view") {
@@ -1264,48 +1434,61 @@ export const MistakeDetailPanel = ({
   };
 
   const loadAiMessagesForSession = async (sessionId: string) => {
+    const requestMistakeId = mistake?.id ?? null;
+    const messageRequestId = nextAiMessageRequest();
     setAiMessagesLoading(true);
     setAiError(null);
-    const result = await mistVaultApi.extensions.ai.sessions.getSessionMessages(sessionId);
-    if (currentMistakeIdRef.current !== (mistake?.id ?? null)) {
-      return;
-    }
+    try {
+      const result = await mistVaultApi.extensions.ai.sessions.getSessionMessages(sessionId);
+      if (!isCurrentAiMessageRequest(messageRequestId, requestMistakeId, sessionId)) {
+        return;
+      }
 
-    if (result.ok) {
-      setAiMessages(result.data);
-    } else {
-      setAiError(aiErrorMessage(result.error.code, result.error.message));
+      if (result.ok) {
+        setAiMessages(result.data);
+      } else {
+        setAiError(aiErrorMessage(result.error.code, result.error.message));
+      }
+    } finally {
+      if (isCurrentAiMessageRequest(messageRequestId, requestMistakeId, sessionId)) {
+        setAiMessagesLoading(false);
+      }
     }
-    setAiMessagesLoading(false);
   };
 
-  const refreshAiSessions = async (preferredSessionId?: string | null): Promise<AiSession[]> => {
+  const refreshAiSessions = async (preferredSessionId?: string | null): Promise<AiSession[] | null> => {
     if (!mistake) {
-      return [];
+      return null;
     }
 
+    const requestMistakeId = mistake.id;
+    const sessionListRequestId = nextAiSessionListRequest();
     setAiSessionsLoading(true);
-    const result = await mistVaultApi.extensions.ai.sessions.listSessions(mistake.id);
-    if (currentMistakeIdRef.current !== mistake.id) {
-      return [];
-    }
+    try {
+      const result = await mistVaultApi.extensions.ai.sessions.listSessions(requestMistakeId);
+      if (!isCurrentAiSessionListRequest(sessionListRequestId, requestMistakeId)) {
+        return null;
+      }
 
-    if (!result.ok) {
-      setAiError(aiErrorMessage(result.error.code, result.error.message));
-      setAiSessions([]);
-      setActiveAiSessionId(null);
-      setAiMessages([]);
-      setAiSessionsLoading(false);
-      return [];
-    }
+      if (!result.ok) {
+        setAiError(aiErrorMessage(result.error.code, result.error.message));
+        setAiSessions([]);
+        setActiveAiSession(null);
+        setAiMessages([]);
+        return [];
+      }
 
-    const sessions = result.data;
-    const nextActiveSessionId =
-      sessions.find((session) => session.id === preferredSessionId)?.id ?? sessions[0]?.id ?? null;
-    setAiSessions(sessions);
-    setActiveAiSessionId(nextActiveSessionId);
-    setAiSessionsLoading(false);
-    return sessions;
+      const sessions = result.data;
+      const nextActiveSessionId =
+        sessions.find((session) => session.id === preferredSessionId)?.id ?? sessions[0]?.id ?? null;
+      setAiSessions(sessions);
+      setActiveAiSession(nextActiveSessionId);
+      return sessions;
+    } finally {
+      if (isCurrentAiSessionListRequest(sessionListRequestId, requestMistakeId)) {
+        setAiSessionsLoading(false);
+      }
+    }
   };
 
   const switchAiSession = async (sessionId: string) => {
@@ -1313,9 +1496,10 @@ export const MistakeDetailPanel = ({
       return;
     }
 
-    setActiveAiSessionId(sessionId);
+    setPendingDeleteAiSession(null);
+    aiMessageRequestSeq.current += 1;
+    setActiveAiSession(sessionId);
     setAiMessages([]);
-    setAiInput("");
     setSelectedAiImageAttachmentIds([]);
     setAiImagePickerOpen(false);
     setAiError(null);
@@ -1330,56 +1514,96 @@ export const MistakeDetailPanel = ({
       return;
     }
 
+    setPendingDeleteAiSession(null);
     setAiSessionBusy(true);
+    aiSessionListRequestSeq.current += 1;
     setAiError(null);
     setAiCopyMessage(null);
-    const result = await mistVaultApi.extensions.ai.sessions.createSession(mistake.id);
-    if (currentMistakeIdRef.current !== mistake.id) {
-      return;
-    }
+    const requestMistakeId = mistake.id;
+    try {
+      const result = await mistVaultApi.extensions.ai.sessions.createSession(requestMistakeId);
+      if (currentMistakeIdRef.current !== requestMistakeId) {
+        return;
+      }
 
-    if (result.ok) {
-      await refreshAiSessions(result.data.id);
-      setAiMessages([]);
-      setSelectedAiImageAttachmentIds([]);
-      setAiImagePickerOpen(false);
-      setAiContextWarning("none");
-    } else {
-      setAiError(aiErrorMessage(result.error.code, result.error.message));
-      await refreshAiSessions(activeAiSessionId);
+      if (result.ok) {
+        const sessions = await refreshAiSessions(result.data.id);
+        if (sessions === null) {
+          return;
+        }
+        setAiMessages([]);
+        setSelectedAiImageAttachmentIds([]);
+        setAiImagePickerOpen(false);
+        setAiContextWarning("none");
+      } else {
+        setAiError(aiErrorMessage(result.error.code, result.error.message));
+      }
+    } finally {
+      if (currentMistakeIdRef.current === requestMistakeId) {
+        setAiSessionBusy(false);
+      }
     }
-    setAiSessionBusy(false);
   };
 
-  const deleteAiSession = async (session: AiSession) => {
-    const confirmed = window.confirm(`确定删除“${session.title}”吗？删除会话不会影响错题本体。`);
-    if (!confirmed || aiSessionBusy || aiSending) {
+  const requestDeleteAiSession = (session: AiSession) => {
+    if (aiSessionBusy || aiSending) {
       return;
     }
-
-    setAiSessionBusy(true);
+    setPendingDeleteAiSession(session);
     setAiError(null);
     setAiCopyMessage(null);
-    const result = await mistVaultApi.extensions.ai.sessions.deleteSession(session.id);
-    if (currentMistakeIdRef.current !== session.mistakeId) {
+  };
+
+  const cancelDeleteAiSession = () => {
+    setPendingDeleteAiSession(null);
+  };
+
+  const confirmDeleteAiSession = async () => {
+    const session = pendingDeleteAiSession;
+    if (!session || aiSessionBusy || aiSending) {
       return;
     }
 
-    if (!result.ok) {
-      setAiError(aiErrorMessage(result.error.code, result.error.message));
-    }
+    setPendingDeleteAiSession(null);
+    setAiSessionBusy(true);
+    aiSessionListRequestSeq.current += 1;
+    aiMessageRequestSeq.current += 1;
+    setAiError(null);
+    setAiCopyMessage(null);
+    const requestMistakeId = session.mistakeId;
+    const previousActiveSessionId = activeAiSessionId;
+    try {
+      const result = await mistVaultApi.extensions.ai.sessions.deleteSession(session.id);
+      if (currentMistakeIdRef.current !== requestMistakeId) {
+        return;
+      }
 
-    const sessions = await refreshAiSessions(session.id === activeAiSessionId ? null : activeAiSessionId);
-    const nextActiveSessionId =
-      sessions.find((item) => item.id === activeAiSessionId && item.id !== session.id)?.id ?? sessions[0]?.id ?? null;
-    setActiveAiSessionId(nextActiveSessionId);
-    setAiContextWarning("none");
-    if (nextActiveSessionId) {
-      await loadAiMessagesForSession(nextActiveSessionId);
-    } else {
-      setAiMessages([]);
+      if (!result.ok) {
+        setAiError(aiErrorMessage(result.error.code, result.error.message));
+        return;
+      }
+
+      const preferredSessionId = session.id === previousActiveSessionId ? null : previousActiveSessionId;
+      const sessions = await refreshAiSessions(preferredSessionId);
+      if (sessions === null) {
+        return;
+      }
+      const nextActiveSessionId =
+        sessions.find((item) => item.id === preferredSessionId)?.id ?? sessions[0]?.id ?? null;
+      setActiveAiSession(nextActiveSessionId);
+      setAiContextWarning("none");
+      if (nextActiveSessionId) {
+        await loadAiMessagesForSession(nextActiveSessionId);
+      } else {
+        setAiMessages([]);
+        setSelectedAiImageAttachmentIds([]);
+        setAiImagePickerOpen(false);
+      }
+    } finally {
+      if (currentMistakeIdRef.current === requestMistakeId) {
+        setAiSessionBusy(false);
+      }
     }
-    setAiSessionBusy(false);
   };
 
   const getAiImageCapabilityMessage = (): string | null => {
@@ -1470,31 +1694,32 @@ export const MistakeDetailPanel = ({
       )
     ].join("\n\n");
 
-    setAiInput((current) =>
-      current.trim() ? `${current.trim()}\n\n${extractedTextBlock}` : extractedTextBlock
-    );
+    aiDraftAppendSeq.current += 1;
+    setAiDraftAppendRequest({
+      id: aiDraftAppendSeq.current,
+      text: extractedTextBlock
+    });
     setAiImageTextStatus("hasText");
     setAiImageTextBusy(false);
   };
 
-  const sendAiMessage = async () => {
-    const content = aiInput.trim();
+  const sendAiMessage = async (content: string): Promise<boolean> => {
     if (!activeAiSessionId || aiSending) {
-      return;
+      return false;
     }
     if (!content) {
       setAiError(aiSessionErrorMessages.AI_MESSAGE_CONTENT_REQUIRED);
-      return;
+      return false;
     }
     if (content.length > maxAiUserMessageChars) {
       setAiError(aiSessionErrorMessages.AI_MESSAGE_TOO_LONG);
-      return;
+      return false;
     }
 
     const readinessMessage = getAiReadinessMessage();
     if (readinessMessage || !aiStatus?.ready) {
       setAiError(readinessMessage ?? "AI 状态加载中，请稍后再试。");
-      return;
+      return false;
     }
 
     const selectedImageIds = selectedAiImageAttachmentIds.filter((id) =>
@@ -1504,13 +1729,13 @@ export const MistakeDetailPanel = ({
       const imageCapabilityMessage = getAiImageCapabilityMessage();
       if (imageCapabilityMessage) {
         setAiError(imageCapabilityMessage);
-        return;
+        return false;
       }
 
       const maxImages = currentAiImageCapability?.maxImagesPerRequest ?? 0;
       if (maxImages > 0 && selectedImageIds.length > maxImages) {
         setAiError(aiSessionErrorMessages.AI_IMAGE_ATTACHMENT_TOO_MANY);
-        return;
+        return false;
       }
 
       const maxImageBytes = currentAiImageCapability?.maxImageBytes ?? null;
@@ -1519,14 +1744,14 @@ export const MistakeDetailPanel = ({
         selectedAiImageAttachments.some((attachment) => attachment.size > maxImageBytes)
       ) {
         setAiError(aiSessionErrorMessages.AI_IMAGE_ATTACHMENT_TOO_LARGE);
-        return;
+        return false;
       }
 
       const confirmed = window.confirm(
         "你选择的图片附件将发送给当前配置的第三方 AI provider 进行分析。请确认图片中不包含不希望上传的隐私信息。MistVault 不会发送本地文件路径、数据库路径、内部文件名或整个错题库。"
       );
       if (!confirmed) {
-        return;
+        return false;
       }
     }
 
@@ -1581,9 +1806,9 @@ export const MistakeDetailPanel = ({
     setAiError(null);
     setAiCopyMessage(null);
     setAiContextWarning("none");
-    setAiInput("");
     setAiMessages((current) => [...current, optimisticUserMessage, optimisticAssistantMessage]);
 
+    let sent = false;
     try {
       const result = await mistVaultApi.extensions.ai.sessions.sendMessage(
         requestSessionId,
@@ -1591,10 +1816,11 @@ export const MistakeDetailPanel = ({
         selectedImageIds.length > 0 ? { imageAttachmentIds: selectedImageIds } : undefined
       );
       if (currentMistakeIdRef.current !== requestMistakeId) {
-        return;
+        return false;
       }
 
       if (result.ok) {
+        sent = true;
         setAiContextWarning(result.data.contextWarning);
         setSelectedAiImageAttachmentIds([]);
         setAiImagePickerOpen(false);
@@ -1604,6 +1830,7 @@ export const MistakeDetailPanel = ({
 
       await loadAiMessagesForSession(requestSessionId);
       await refreshAiSessions(requestSessionId);
+      return sent;
     } finally {
       if (currentMistakeIdRef.current === requestMistakeId) {
         setAiSending(false);
@@ -1662,13 +1889,7 @@ export const MistakeDetailPanel = ({
       Boolean(aiStatus?.ready) &&
       Boolean(currentAiImageCapability) &&
       !currentAiImageCapability?.supportsImageInput;
-    const canSend =
-      Boolean(activeSession) &&
-      Boolean(aiStatus?.ready) &&
-      !aiSending &&
-      !aiMessagesLoading &&
-      aiInput.trim().length > 0 &&
-      aiInput.trim().length <= maxAiUserMessageChars;
+    const activeSessionReady = Boolean(activeSession);
     const canCreate = !aiSessionsLoading && !aiSessionBusy && !sessionLimitReached;
 
     return (
@@ -1720,7 +1941,7 @@ export const MistakeDetailPanel = ({
                     <button
                       type="button"
                       className="ai-session-delete"
-                      onClick={() => void deleteAiSession(session)}
+                      onClick={() => requestDeleteAiSession(session)}
                       disabled={aiSessionBusy || aiSending}
                       aria-label={`删除 ${session.title}`}
                     >
@@ -1729,24 +1950,57 @@ export const MistakeDetailPanel = ({
                   </article>
                 ))}
               </div>
+              {pendingDeleteAiSession ? (
+                <div className="ai-delete-confirm" role="dialog" aria-label="删除 AI 会话确认">
+                  <p>
+                    确定删除“{pendingDeleteAiSession.title}”吗？删除会话不会影响错题本体。
+                  </p>
+                  <div>
+                    <button
+                      type="button"
+                      className="danger-action"
+                      onClick={() => void confirmDeleteAiSession()}
+                      disabled={aiSessionBusy || aiSending}
+                    >
+                      确定删除
+                    </button>
+                    <button
+                      type="button"
+                      onClick={cancelDeleteAiSession}
+                      disabled={aiSessionBusy}
+                    >
+                      取消
+                    </button>
+                  </div>
+                </div>
+              ) : null}
             </aside>
 
             <section className="ai-conversation-panel" aria-label="AI 会话消息">
-              {activeSession ? (
+              {activeAiSessionId ? (
                 <>
                   <div className="ai-conversation-head">
                     <div>
-                      <strong>{activeSession.title}</strong>
-                      <span>{activeSession.lastMessageAt ? `最后消息：${formatDate(activeSession.lastMessageAt)}` : "尚未发送消息"}</span>
+                      <strong>{activeSession?.title ?? "会话状态刷新中"}</strong>
+                      <span>
+                        {activeSession?.lastMessageAt
+                          ? `最后消息：${formatDate(activeSession.lastMessageAt)}`
+                          : activeSessionReady
+                            ? "尚未发送消息"
+                            : "正在同步会话状态"}
+                      </span>
                     </div>
                     <button
                       type="button"
-                      onClick={() => void loadAiMessagesForSession(activeSession.id)}
-                      disabled={aiMessagesLoading || aiSending}
+                      onClick={() => void loadAiMessagesForSession(activeAiSessionId)}
+                      disabled={!activeSessionReady || aiMessagesLoading || aiSending}
                     >
                       刷新
                     </button>
                   </div>
+                  {!activeSessionReady ? (
+                    <p className="state-text compact-state">会话状态刷新中，输入草稿不会受影响。</p>
+                  ) : null}
                   {aiMessagesLoading ? <p className="state-text compact-state">正在加载消息...</p> : null}
                   {!aiMessagesLoading && aiMessages.length === 0 ? (
                     <p className="state-text compact-state">这个会话还没有消息。输入一个追问开始对话。</p>
@@ -1781,125 +2035,6 @@ export const MistakeDetailPanel = ({
                       );
                     })}
                   </div>
-                  <form
-                    className="ai-message-composer"
-                    onSubmit={(event) => {
-                      event.preventDefault();
-                      void sendAiMessage();
-                    }}
-                  >
-                    <label>
-                      <span>继续追问</span>
-                      <textarea
-                        value={aiInput}
-                        onChange={(event) => {
-                          setAiInput(event.target.value);
-                          setAiError(null);
-                        }}
-                        maxLength={maxAiUserMessageChars}
-                        placeholder="输入你想继续追问的内容"
-                        disabled={!activeSession}
-                      />
-                    </label>
-                    <div className="ai-composer-actions">
-                      <span className={aiInput.length > maxAiUserMessageChars ? "state-error" : ""}>
-                        {aiInput.length}/{maxAiUserMessageChars}
-                      </span>
-                      <div className="ai-image-attachment-tools">
-                        <button
-                          type="button"
-                          onClick={() => setAiImagePickerOpen((current) => !current)}
-                          disabled={!activeSession || aiSending || Boolean(imageCapabilityMessage)}
-                          title={imageCapabilityMessage ?? "选择图片附件给 AI 分析"}
-                        >
-                          选择图片附件给 AI 分析
-                        </button>
-                        {imageInputUnsupported ? <span>当前模型不支持直接读图</span> : null}
-                        {selectedAiImageAttachments.length > 0 ? (
-                          <span>
-                            已选 {selectedAiImageAttachments.length}
-                            {maxImagesPerRequest > 0 ? `/${maxImagesPerRequest}` : ""} 张
-                          </span>
-                        ) : null}
-                      </div>
-                      <button type="submit" disabled={!canSend}>
-                        {aiSending ? "发送中..." : "发送"}
-                      </button>
-                    </div>
-                    {imageCapabilityMessage ? (
-                      <p className="state-text compact-state state-warning">{imageCapabilityMessage}</p>
-                    ) : null}
-                    {imageInputUnsupported && aiImageAttachments.length > 0 ? (
-                      <div className="ai-image-text-fallback">
-                        {aiImageTextStatus === "checking" ? (
-                          <p className="state-text compact-state">正在检查图片附件的 OCR / 文本提取结果...</p>
-                        ) : null}
-                        {aiImageTextStatus === "hasText" ? (
-                          <button
-                            type="button"
-                            onClick={() => void appendImageExtractedTextToAiInput()}
-                            disabled={aiSending || aiImageTextBusy}
-                          >
-                            {aiImageTextBusy ? "正在加入提取文本..." : "改用提取文本追问"}
-                          </button>
-                        ) : null}
-                        {aiImageTextStatus === "none" ? (
-                          <p className="state-text compact-state">
-                            请先对附件进行 OCR / 文本提取，再将提取文本发送给 AI。
-                          </p>
-                        ) : null}
-                      </div>
-                    ) : null}
-                    {selectedAiImageAttachments.length > 0 ? (
-                      <ul className="ai-selected-images">
-                        {selectedAiImageAttachments.map((attachment) => (
-                          <li key={attachment.id}>
-                            <span>
-                              {attachment.originalName} · {attachment.field} · {formatSize(attachment.size)}
-                            </span>
-                            <button type="button" onClick={() => toggleAiImageAttachment(attachment)} disabled={aiSending}>
-                              移除
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
-                    ) : null}
-                    {aiImagePickerOpen && !imageCapabilityMessage ? (
-                      <div className="ai-image-picker">
-                        {aiImageAttachments.length === 0 ? (
-                          <p className="state-text compact-state">当前题没有可发送给 AI 的图片附件。</p>
-                        ) : (
-                          aiImageAttachments.map((attachment) => {
-                            const checked = selectedAiImageAttachmentIds.includes(attachment.id);
-                            const tooLarge = maxImageBytes !== null && attachment.size > maxImageBytes;
-                            const atLimit =
-                              !checked &&
-                              maxImagesPerRequest > 0 &&
-                              selectedAiImageAttachmentIds.length >= maxImagesPerRequest;
-                            return (
-                              <label key={attachment.id} className="ai-image-option">
-                                <input
-                                  type="checkbox"
-                                  checked={checked}
-                                  disabled={aiSending || tooLarge || atLimit}
-                                  onChange={() => toggleAiImageAttachment(attachment)}
-                                />
-                                <span>
-                                  <strong>{attachment.originalName}</strong>
-                                  <small>
-                                    {[attachment.field, formatSize(attachment.size), attachment.ext || attachment.mimeType]
-                                      .filter(Boolean)
-                                      .join(" · ")}
-                                  </small>
-                                  {tooLarge ? <small className="state-error">图片超过当前模型大小限制</small> : null}
-                                </span>
-                              </label>
-                            );
-                          })
-                        )}
-                      </div>
-                    ) : null}
-                  </form>
                 </>
               ) : (
                 <div className="ai-empty-conversation">
@@ -1909,6 +2044,107 @@ export const MistakeDetailPanel = ({
                   </button>
                 </div>
               )}
+              <AiSessionComposer
+                activeSessionId={activeAiSessionId}
+                aiReady={Boolean(aiStatus?.ready)}
+                sending={aiSending}
+                maxChars={maxAiUserMessageChars}
+                appendRequest={aiDraftAppendRequest}
+                onSend={sendAiMessage}
+                actionControls={
+                  <div className="ai-image-attachment-tools">
+                    <button
+                      type="button"
+                      onClick={() => setAiImagePickerOpen((current) => !current)}
+                      disabled={!activeAiSessionId || aiSending || Boolean(imageCapabilityMessage)}
+                      title={imageCapabilityMessage ?? "选择图片附件给 AI 分析"}
+                    >
+                      选择图片附件给 AI 分析
+                    </button>
+                    {imageInputUnsupported ? <span>当前模型不支持直接读图</span> : null}
+                    {selectedAiImageAttachments.length > 0 ? (
+                      <span>
+                        已选 {selectedAiImageAttachments.length}
+                        {maxImagesPerRequest > 0 ? `/${maxImagesPerRequest}` : ""} 张
+                      </span>
+                    ) : null}
+                  </div>
+                }
+              >
+                {imageCapabilityMessage ? (
+                  <p className="state-text compact-state state-warning">{imageCapabilityMessage}</p>
+                ) : null}
+                {imageInputUnsupported && aiImageAttachments.length > 0 ? (
+                  <div className="ai-image-text-fallback">
+                    {aiImageTextStatus === "checking" ? (
+                      <p className="state-text compact-state">正在检查图片附件的 OCR / 文本提取结果...</p>
+                    ) : null}
+                    {aiImageTextStatus === "hasText" ? (
+                      <button
+                        type="button"
+                        onClick={() => void appendImageExtractedTextToAiInput()}
+                        disabled={aiSending || aiImageTextBusy}
+                      >
+                        {aiImageTextBusy ? "正在加入提取文本..." : "改用提取文本追问"}
+                      </button>
+                    ) : null}
+                    {aiImageTextStatus === "none" ? (
+                      <p className="state-text compact-state">
+                        请先对附件进行 OCR / 文本提取，再将提取文本发送给 AI。
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
+                {selectedAiImageAttachments.length > 0 ? (
+                  <ul className="ai-selected-images">
+                    {selectedAiImageAttachments.map((attachment) => (
+                      <li key={attachment.id}>
+                        <span>
+                          {attachment.originalName} · {attachment.field} · {formatSize(attachment.size)}
+                        </span>
+                        <button type="button" onClick={() => toggleAiImageAttachment(attachment)} disabled={aiSending}>
+                          移除
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+                {aiImagePickerOpen && !imageCapabilityMessage ? (
+                  <div className="ai-image-picker">
+                    {aiImageAttachments.length === 0 ? (
+                      <p className="state-text compact-state">当前题没有可发送给 AI 的图片附件。</p>
+                    ) : (
+                      aiImageAttachments.map((attachment) => {
+                        const checked = selectedAiImageAttachmentIds.includes(attachment.id);
+                        const tooLarge = maxImageBytes !== null && attachment.size > maxImageBytes;
+                        const atLimit =
+                          !checked &&
+                          maxImagesPerRequest > 0 &&
+                          selectedAiImageAttachmentIds.length >= maxImagesPerRequest;
+                        return (
+                          <label key={attachment.id} className="ai-image-option">
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              disabled={aiSending || tooLarge || atLimit}
+                              onChange={() => toggleAiImageAttachment(attachment)}
+                            />
+                            <span>
+                              <strong>{attachment.originalName}</strong>
+                              <small>
+                                {[attachment.field, formatSize(attachment.size), attachment.ext || attachment.mimeType]
+                                  .filter(Boolean)
+                                  .join(" · ")}
+                              </small>
+                              {tooLarge ? <small className="state-error">图片超过当前模型大小限制</small> : null}
+                            </span>
+                          </label>
+                        );
+                      })
+                    )}
+                  </div>
+                ) : null}
+              </AiSessionComposer>
             </section>
           </div>
         </div>
