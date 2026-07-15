@@ -88,7 +88,7 @@ export const initializeDataDirectory = (basePath: string): DataDirectoryInfo => 
           aiProvider: null,
           reviewRecommendationEnabled: false,
           defaultExportIncludeAttachments: true,
-          ocrEnabled: false,
+          ocrEnabled: true,
           reviewDailyCount: 5
         },
         null,

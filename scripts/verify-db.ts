@@ -714,6 +714,30 @@ assert(
   "Legacy general attachments should still be readable."
 );
 
+const defaultSettings = assertOk(services.settingsService.getAll());
+assert(defaultSettings.ocrEnabled === true, "Missing OCR setting should default to true.");
+const defaultOcrStatus = assertOk(services.settingsService.getOcrStatus());
+assert(defaultOcrStatus.enabled === true, "Default OCR status should be enabled.");
+assert(defaultOcrStatus.status === "ready", "Default OCR status should be ready.");
+assert(defaultOcrStatus.message.includes("图片 OCR 已启用"), "Default OCR status should describe enabled image OCR.");
+assert(defaultOcrStatus.status !== "noop", "OCR status must not return noop.");
+assert(!defaultOcrStatus.message.includes("placeholder"), "OCR status must not use placeholder wording.");
+
+const disabledOcrSettings = assertOk(
+  services.settingsService.updateSettings({
+    ocrEnabled: false
+  })
+);
+assert(disabledOcrSettings.ocrEnabled === false, "Explicit false OCR setting should be preserved.");
+const disabledOcrStatus = assertOk(services.settingsService.getOcrStatus());
+assert(disabledOcrStatus.enabled === false, "Disabled OCR status should be disabled.");
+assert(disabledOcrStatus.status === "disabled", "Disabled OCR status should use disabled status.");
+assert(
+  disabledOcrStatus.message === "图片 OCR 已在设置中关闭。",
+  "Disabled OCR status should use the stable disabled message."
+);
+assert(disabledOcrStatus.status !== "noop", "Disabled OCR status must not return noop.");
+
 const updatedSettings = assertOk(
   services.settingsService.updateSettings({
     theme: "dark",
@@ -734,6 +758,8 @@ assert(
 );
 assert(updatedSettings.autoBackupEnabled, "Auto backup setting update failed.");
 assert(updatedSettings.ocrEnabled, "OCR setting update failed.");
+const enabledOcrStatus = assertOk(services.settingsService.getOcrStatus());
+assert(enabledOcrStatus.status === "ready", "Enabled OCR status should return ready.");
 assert(updatedSettings.reviewRecommendationEnabled, "Review setting update failed.");
 assert(updatedSettings.reviewDailyCount === 10, "Review daily count update failed.");
 assert(assertOk(services.settingsService.getBasicInfo()).theme === "dark", "Settings basic info failed.");

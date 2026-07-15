@@ -218,6 +218,7 @@ const extractionErrorMessages: Record<string, string> = {
   EXTRACTION_FILE_MISSING: "附件文件不存在",
   EXTRACTION_PATH_INVALID: "附件路径异常，已阻止访问",
   EXTRACTION_FILE_TOO_LARGE: "文件过大，暂不支持提取",
+  EXTRACTION_OCR_DISABLED: "图片 OCR 已在设置中关闭。",
   EXTRACTION_OCR_RUNTIME_MISSING: "内置 OCR 引擎缺失",
   EXTRACTION_OCR_LANGUAGE_MISSING: "OCR 语言包缺失",
   EXTRACTION_OCR_FAILED: "OCR 识别失败",

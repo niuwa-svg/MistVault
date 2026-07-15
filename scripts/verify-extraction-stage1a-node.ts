@@ -128,7 +128,18 @@ const checksByMode: Record<string, string[]> = {
     "apiResultShape",
     "errorRedaction"
   ],
-  ocr: ["pngOcr", "jpgOcr", "bmpOcr", "runtimeMissing", "chiSimMissing", "engMissing", "tempCleanup"]
+  ocr: [
+    "ocrDisabled",
+    "ocrDisabledSkipsRegistry",
+    "ocrDisabledTextUnaffected",
+    "pngOcr",
+    "jpgOcr",
+    "bmpOcr",
+    "runtimeMissing",
+    "chiSimMissing",
+    "engMissing",
+    "tempCleanup"
+  ]
 };
 const allChecks = Array.from(new Set(Object.values(checksByMode).flat()));
 
@@ -179,11 +190,41 @@ const unavailableRapidOcrEngine: OcrEngine = {
   })
 };
 
-const createService = (runtimeStatus?: {
-  tesseractExists: boolean;
-  chiSimExists: boolean;
-  engExists: boolean;
-}): AttachmentTextExtractionService => {
+const ocrFailure = (engine: "rapidocr" | "tesseract"): OcrEngineResult => ({
+  ok: false,
+  engine,
+  engineVersion: null,
+  elapsedMs: 1,
+  text: "",
+  blocks: [],
+  warning: null,
+  errorCode: "EXTRACTION_OCR_FAILED",
+  message: "OCR failed."
+});
+
+const createCountingOcrRegistry = (): { registry: Pick<OcrEngineRegistry, "recognize">; calls: number } => {
+  const counter = {
+    calls: 0,
+    registry: {
+      recognize: async (): Promise<OcrEngineResult> => {
+        counter.calls += 1;
+        return ocrFailure("rapidocr");
+      }
+    }
+  };
+  return counter;
+};
+
+const createService = (options: {
+  runtimeStatus?: {
+    tesseractExists: boolean;
+    chiSimExists: boolean;
+    engExists: boolean;
+  };
+  imageOcrEnabled?: boolean;
+  ocrRegistry?: Pick<OcrEngineRegistry, "recognize">;
+} = {}): AttachmentTextExtractionService => {
+  const { runtimeStatus, imageOcrEnabled = true, ocrRegistry } = options;
   const tesseractEngine = new TesseractOcrEngine(
     {
       getStatus: () => ({
@@ -197,13 +238,14 @@ const createService = (runtimeStatus?: {
     } as never,
     dataDirectoryInfo
   );
-  const registry = new OcrEngineRegistry(unavailableRapidOcrEngine, tesseractEngine);
+  const registry = ocrRegistry ?? new OcrEngineRegistry(unavailableRapidOcrEngine, tesseractEngine);
 
   return new AttachmentTextExtractionService(
     attachmentsRepository as never,
     textCacheRepository as never,
     dataDirectoryInfo,
-    registry
+    registry as OcrEngineRegistry,
+    () => imageOcrEnabled
   );
 };
 
@@ -407,6 +449,44 @@ export default async function verifyExtractionStage1A(): Promise<void> {
     }
 
     if (shouldRun("ocr")) {
+      const disabledRegistry = createCountingOcrRegistry();
+      const disabledService = createService({
+        imageOcrEnabled: false,
+        ocrRegistry: disabledRegistry.registry
+      });
+      const disabledPngAttachment = createAttachmentFromExisting(
+        fixtureImagePath,
+        "phase1a-disabled.png",
+        ".png"
+      );
+      assertFail(
+        await disabledService.extractAttachmentText(disabledPngAttachment.id),
+        "EXTRACTION_OCR_DISABLED"
+      );
+      assert(disabledRegistry.calls === 0, "Disabled image OCR should not call OCR registry.");
+      const disabledTxtAttachment = createAttachmentFile(
+        "phase1a-disabled.txt",
+        ".txt",
+        Buffer.from("OCR disabled txt still works", "utf8")
+      );
+      assert(
+        assertOk(await disabledService.extractAttachmentText(disabledTxtAttachment.id)).extractedText.includes(
+          "OCR disabled txt still works"
+        ),
+        "TXT extraction should work when image OCR is disabled."
+      );
+      const disabledMdAttachment = createAttachmentFile(
+        "phase1a-disabled.md",
+        ".md",
+        Buffer.from("# OCR disabled md still works", "utf8")
+      );
+      assert(
+        assertOk(await disabledService.extractAttachmentText(disabledMdAttachment.id)).extractedText.includes(
+          "OCR disabled md still works"
+        ),
+        "MD extraction should work when image OCR is disabled."
+      );
+
       pngAttachment = createAttachmentFromExisting(fixtureImagePath, "phase1a.png", ".png");
       assertOcrText(assertOk(await service.extractAttachmentText(pngAttachment.id)).extractedText, "PNG");
       verifyTempCleaned();
@@ -423,15 +503,15 @@ export default async function verifyExtractionStage1A(): Promise<void> {
     if (shouldRun("errors", "ocr")) {
       const ocrErrorAttachment = pngAttachment ?? createAttachmentFromExisting(fixtureImagePath, "phase1a-error.png", ".png");
       assertFail(
-        await createService({ tesseractExists: false, chiSimExists: true, engExists: true }).extractAttachmentText(ocrErrorAttachment.id),
+        await createService({ runtimeStatus: { tesseractExists: false, chiSimExists: true, engExists: true } }).extractAttachmentText(ocrErrorAttachment.id),
         "EXTRACTION_OCR_RUNTIME_MISSING"
       );
       assertFail(
-        await createService({ tesseractExists: true, chiSimExists: false, engExists: true }).extractAttachmentText(ocrErrorAttachment.id),
+        await createService({ runtimeStatus: { tesseractExists: true, chiSimExists: false, engExists: true } }).extractAttachmentText(ocrErrorAttachment.id),
         "EXTRACTION_OCR_LANGUAGE_MISSING"
       );
       assertFail(
-        await createService({ tesseractExists: true, chiSimExists: true, engExists: false }).extractAttachmentText(ocrErrorAttachment.id),
+        await createService({ runtimeStatus: { tesseractExists: true, chiSimExists: true, engExists: false } }).extractAttachmentText(ocrErrorAttachment.id),
         "EXTRACTION_OCR_LANGUAGE_MISSING"
       );
     }

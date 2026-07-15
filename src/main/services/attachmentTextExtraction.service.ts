@@ -78,6 +78,7 @@ const extractionMessages: Record<string, string> = {
   EXTRACTION_FILE_MISSING: "附件文件不存在。",
   EXTRACTION_PATH_INVALID: "附件路径无效。",
   EXTRACTION_FILE_TOO_LARGE: "附件文件过大，暂不支持提取。",
+  EXTRACTION_OCR_DISABLED: "图片 OCR 已在设置中关闭。",
   EXTRACTION_OCR_RUNTIME_MISSING: "内置 OCR 引擎缺失。",
   EXTRACTION_OCR_LANGUAGE_MISSING: "内置 OCR 语言包缺失。",
   EXTRACTION_OCR_FAILED: "OCR 识别失败。",
@@ -134,7 +135,8 @@ export class AttachmentTextExtractionService {
     private readonly attachmentsRepository: AttachmentsRepository,
     private readonly textCacheRepository: AttachmentTextCacheRepository,
     private readonly dataDirectoryInfo: DataDirectoryInfo,
-    private readonly ocrEngineRegistry: OcrEngineRegistry
+    private readonly ocrEngineRegistry: OcrEngineRegistry,
+    private readonly isImageOcrEnabled: () => boolean = () => true
   ) {}
 
   getStatus(attachmentId: string): ApiResult<AttachmentTextStatusResult> {
@@ -254,6 +256,12 @@ export class AttachmentTextExtractionService {
     const now = new Date().toISOString();
 
     try {
+      if (sourceType === "ocr" && !this.isImageOcrEnabled()) {
+        throw new ExtractionFailure(
+          "EXTRACTION_OCR_DISABLED",
+          extractionMessages.EXTRACTION_OCR_DISABLED
+        );
+      }
       this.validateSize(resolved.data, sourceType);
       const sourceHash = this.hashFile(resolved.data.absolutePath);
       const extracted = await this.extractByType(resolved.data, sourceType);

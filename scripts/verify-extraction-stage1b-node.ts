@@ -144,12 +144,13 @@ const assertFail = (result: ApiResult<unknown>, expectedCode: string): void => {
   assert(!serialized.includes(dataDirectoryInfo.attachmentsPath), "error.details leaked attachment path.");
 };
 
-const createService = (): AttachmentTextExtractionService =>
+const createService = (imageOcrEnabled = true): AttachmentTextExtractionService =>
   new AttachmentTextExtractionService(
     attachmentsRepository as never,
     textCacheRepository as never,
     dataDirectoryInfo,
-    disabledOcrRegistry as never
+    disabledOcrRegistry as never,
+    () => imageOcrEnabled
   );
 
 const createAttachmentFile = (
@@ -264,7 +265,7 @@ export default async function verifyExtractionStage1B(): Promise<void> {
     mkdirSync(dataDirectoryInfo.backupsPath, { recursive: true });
     writeFileSync(dataDirectoryInfo.configPath, "{}");
 
-    const service = createService();
+    const service = createService(false);
     const docxXml = `
       <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
         <w:body>
@@ -337,7 +338,9 @@ export default async function verifyExtractionStage1B(): Promise<void> {
             "pdfTooLarge",
             "errorRedaction",
             "docxCacheSuccess",
-            "pdfCacheSuccess"
+            "pdfCacheSuccess",
+            "imageOcrDisabledDoesNotAffectDocx",
+            "imageOcrDisabledDoesNotAffectPdf"
           ],
           pdf: "implemented"
         },

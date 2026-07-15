@@ -105,7 +105,7 @@ const emptyForm = (): SettingsForm => ({
   aiApiKey: "",
   aiApiKeyConfigured: false,
   clearAiApiKey: false,
-  ocrEnabled: false,
+  ocrEnabled: true,
   reviewRecommendationEnabled: false,
   reviewDailyCount: 5
 });
