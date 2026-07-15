@@ -17,7 +17,12 @@ import type {
 } from "@shared/types";
 import { sanitizeApiErrorDetails } from "@shared/types";
 import type { DatabaseAdapter } from "../db/adapters/database.adapter";
-import type { AiSessionRepository, AttachmentsRepository } from "../repositories";
+import type {
+  AiSessionRepository,
+  AttachmentExtractedTextForAi,
+  AttachmentTextCacheRepository,
+  AttachmentsRepository
+} from "../repositories";
 import type { NodeService } from "./node.service";
 import type { PrivateAiSettings, SettingsService } from "./settings.service";
 import { captureServiceError, serviceFail, serviceOk } from "./serviceResult";
@@ -43,6 +48,9 @@ const maxTurns = 20;
 const timeoutMs = 60_000;
 const maxUserMessageChars = 8_000;
 const imageAttachmentSourceKind = "imageAttachment";
+const attachmentTextSourceKind = "attachmentText";
+const maxAttachmentTextChars = 4_000;
+const maxTotalAttachmentTextChars = 12_000;
 const supportedImageExts = new Set([".jpg", ".jpeg", ".png", ".webp", ".bmp"]);
 const supportedImageMimeTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/bmp"]);
 const mimeByExt = new Map<string, string>([
@@ -162,6 +170,12 @@ type PreparedImageAttachment = {
   dataUrl: string;
 };
 
+type PreparedAttachmentTextContext = {
+  items: AttachmentExtractedTextForAi[];
+  promptText: string;
+  truncated: boolean;
+};
+
 const normalizeImageExt = (attachment: Attachment): string => {
   const fallbackExt = attachment.originalName.includes(".")
     ? attachment.originalName.slice(attachment.originalName.lastIndexOf("."))
@@ -243,6 +257,64 @@ const attachImagesToLastUserMessage = (
   ];
 };
 
+const formatAttachmentTextSourceType = (item: AttachmentExtractedTextForAi): string => {
+  if (item.isEdited) {
+    return "手动修正";
+  }
+  if (item.sourceType === "ocr") {
+    return "OCR";
+  }
+  return "文本提取";
+};
+
+const buildAttachmentTextContext = (
+  items: AttachmentExtractedTextForAi[]
+): PreparedAttachmentTextContext => {
+  if (items.length === 0) {
+    return { items, promptText: "", truncated: false };
+  }
+
+  let remainingTotal = maxTotalAttachmentTextChars;
+  let truncated = false;
+  const blocks: string[] = [];
+
+  for (const item of items) {
+    const normalized = item.extractedText.trim();
+    if (!normalized || remainingTotal <= 0) {
+      truncated = truncated || Boolean(normalized);
+      continue;
+    }
+
+    const allowedForItem = Math.min(maxAttachmentTextChars, remainingTotal);
+    const text =
+      normalized.length > allowedForItem
+        ? `${normalized.slice(0, allowedForItem)}\n[本附件文本因过长已截断]`
+        : normalized;
+
+    truncated = truncated || normalized.length > allowedForItem;
+    remainingTotal -= Math.min(normalized.length, allowedForItem);
+    blocks.push([
+      `附件：${item.originalName}`,
+      `字段：${item.field}`,
+      `来源：${formatAttachmentTextSourceType(item)}`,
+      "文本：",
+      text
+    ].join("\n"));
+  }
+
+  return {
+    items,
+    promptText: [
+      "以下是用户固定到当前 AI 会话的附件文本上下文。",
+      "这些内容来自 OCR / 文本提取或用户手动修正，可能存在识别错误。",
+      "请优先结合用户当前问题作答，不要声称你直接看到了原图或本地文件。",
+      "",
+      ...blocks
+    ].join("\n\n"),
+    truncated
+  };
+};
+
 const selectHistoryMessages = (messages: AiMessage[]): SelectedHistory => {
   const eligible = messages
     .filter(
@@ -289,7 +361,8 @@ const buildSessionChatMessages = (
   mistake: Mistake,
   nodePath: string[],
   historyMessages: AiChatMessage[],
-  hasImageInput: boolean
+  hasImageInput: boolean,
+  attachmentTextContext: PreparedAttachmentTextContext
 ): AiChatMessage[] => {
   const keywords = mistake.keywords.map((keyword) => keyword.name).join("、") || "未提供";
   const system = [
@@ -335,6 +408,9 @@ const buildSessionChatMessages = (
   return [
     { role: "system", content: system },
     { role: "user", content: context },
+    ...(attachmentTextContext.promptText
+      ? [{ role: "user" as const, content: attachmentTextContext.promptText }]
+      : []),
     ...historyMessages
   ];
 };
@@ -348,6 +424,7 @@ export class AiSessionService {
     private readonly adapter: DatabaseAdapter,
     private readonly aiSessionRepository: AiSessionRepository,
     private readonly attachmentsRepository: AttachmentsRepository,
+    private readonly attachmentTextCacheRepository: AttachmentTextCacheRepository,
     private readonly settingsService: SettingsService,
     private readonly mistakeService: MistakeService,
     private readonly nodeService: NodeService,
@@ -507,6 +584,13 @@ export class AiSessionService {
     }
 
     const imageAttachmentIds = this.normalizeImageAttachmentIds(options.imageAttachmentIds);
+    const attachmentTextIds = this.normalizeAttachmentTextIds(options.attachmentTextIds);
+    const attachmentTextContext = buildAttachmentTextContext(
+      this.attachmentTextCacheRepository.listSuccessfulTextsByAttachmentIds(
+        mistakeResult.data.id,
+        attachmentTextIds
+      )
+    );
     const preparedImages = this.prepareImageAttachments(
       imageAttachmentIds,
       mistakeResult.data.id,
@@ -544,6 +628,19 @@ export class AiSessionService {
             field: image.attachment.field as AttachmentField
           });
         }
+        for (const item of attachmentTextContext.items) {
+          this.aiSessionRepository.appendMessageSource({
+            id: randomUUID(),
+            messageId: message.id,
+            sourceKind: attachmentTextSourceKind,
+            attachmentId: item.attachmentId ?? null,
+            originalName: item.originalName,
+            mimeType: null,
+            ext: null,
+            size: item.extractedText.trim().length,
+            field: item.field as AttachmentField
+          });
+        }
         return this.aiSessionRepository.getMessageById(message.id) ?? message;
       })(),
       assistantMessage: this.aiSessionRepository.appendMessage({
@@ -567,7 +664,8 @@ export class AiSessionService {
       mistakeResult.data,
       nodePathResult.ok ? nodePathResult.data.map((node) => node.name) : [],
       selectedHistory.messages,
-      preparedImages.data.length > 0
+      preparedImages.data.length > 0,
+      attachmentTextContext
     );
     const requestMessages = attachImagesToLastUserMessage(
       providerMessages,
@@ -603,7 +701,7 @@ export class AiSessionService {
         session: this.aiSessionRepository.getActiveSessionById(sessionId) ?? session,
         userMessage,
         assistantMessage: updatedAssistant,
-        contextWarning: selectedHistory.warning
+        contextWarning: attachmentTextContext.truncated ? "truncated" : selectedHistory.warning
       });
     } catch (error) {
       const code =
@@ -650,6 +748,20 @@ export class AiSessionService {
   }
 
   private normalizeImageAttachmentIds(value: unknown): string[] {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return Array.from(
+      new Set(
+        value
+          .filter((item): item is string => validateId(item))
+          .map((item) => item.trim())
+      )
+    );
+  }
+
+  private normalizeAttachmentTextIds(value: unknown): string[] {
     if (!Array.isArray(value)) {
       return [];
     }

@@ -481,6 +481,90 @@ const chineseCacheRow = initializedDatabase.adapter.get<{ extracted_text: string
 );
 assert(chineseCacheRow?.extracted_text === chineseOcrSample, "Chinese OCR text was not preserved in SQLite cache.");
 assertOk(services.attachmentTextExtractionService.clearExtractedText(textAttachment.id));
+assertOk(
+  services.attachmentTextExtractionService.updateExtractedText(
+    attachment.id,
+    `${chineseOcrSample}\nPinned current attachment text unique.`
+  )
+);
+assertOk(
+  services.attachmentTextExtractionService.updateExtractedText(
+    textAttachment.id,
+    "Pinned current attachment text unique."
+  )
+);
+writeFileSync(join(dataDirectoryInfo.attachmentsPath, "long-note-stored.txt"), Buffer.from("long text"));
+const longTextAttachment = assertOk(
+  services.attachmentService.createMetadata({
+    mistakeId: mistake.id,
+    field: "answerAnalysis",
+    originalName: "long-note.txt",
+    storedName: "long-note-stored.txt",
+    mimeType: "text/plain",
+    ext: ".txt",
+    relativePath: "attachments/long-note-stored.txt",
+    size: 9
+  })
+);
+assertOk(
+  services.attachmentTextExtractionService.updateExtractedText(
+    longTextAttachment.id,
+    `Pinned long attachment text start ${"x".repeat(15_000)} Pinned long attachment text end`
+  )
+);
+writeFileSync(join(dataDirectoryInfo.attachmentsPath, "empty-text-stored.txt"), Buffer.from(""));
+const emptyTextAttachment = assertOk(
+  services.attachmentService.createMetadata({
+    mistakeId: mistake.id,
+    field: "note",
+    originalName: "empty.txt",
+    storedName: "empty-text-stored.txt",
+    mimeType: "text/plain",
+    ext: ".txt",
+    relativePath: "attachments/empty-text-stored.txt",
+    size: 0
+  })
+);
+assertOk(services.attachmentTextExtractionService.updateExtractedText(emptyTextAttachment.id, ""));
+writeFileSync(join(dataDirectoryInfo.attachmentsPath, "failed-text-stored.txt"), Buffer.from("failed"));
+const failedTextAttachment = assertOk(
+  services.attachmentService.createMetadata({
+    mistakeId: mistake.id,
+    field: "note",
+    originalName: "failed.txt",
+    storedName: "failed-text-stored.txt",
+    mimeType: "text/plain",
+    ext: ".txt",
+    relativePath: "attachments/failed-text-stored.txt",
+    size: 6
+  })
+);
+initializedDatabase.adapter.run(
+  `
+    INSERT INTO attachment_text_cache (
+      attachment_id, original_name, field, source_type, extracted_text,
+      extraction_status, error_code, error_message, source_size, source_hash,
+      extracted_at, is_edited, edited_at, updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `,
+  [
+    failedTextAttachment.id,
+    failedTextAttachment.originalName,
+    failedTextAttachment.field,
+    "text",
+    "FAILED TEXT SHOULD NOT ENTER AI PROMPT",
+    "failed",
+    "EXTRACTION_PARSE_FAILED",
+    "failed",
+    failedTextAttachment.size,
+    null,
+    null,
+    0,
+    null,
+    new Date().toISOString()
+  ]
+);
 const otherMistakeForAttachment = assertOk(
   services.mistakeService.create({
     nodeId: node.id,
@@ -500,6 +584,25 @@ const otherMistakeAttachment = assertOk(
     relativePath: "attachments/other-stored.png",
     size: questionImageBytes.length
   })
+);
+writeFileSync(join(dataDirectoryInfo.attachmentsPath, "other-text-stored.txt"), Buffer.from("other text"));
+const otherMistakeTextAttachment = assertOk(
+  services.attachmentService.createMetadata({
+    mistakeId: otherMistakeForAttachment.id,
+    field: "note",
+    originalName: "other-note.txt",
+    storedName: "other-text-stored.txt",
+    mimeType: "text/plain",
+    ext: ".txt",
+    relativePath: "attachments/other-text-stored.txt",
+    size: 10
+  })
+);
+assertOk(
+  services.attachmentTextExtractionService.updateExtractedText(
+    otherMistakeTextAttachment.id,
+    "Cross mistake text must not enter prompt."
+  )
 );
 const extraImageAttachments = Array.from({ length: 6 }, (_item, index) => {
   const storedName = `extra-${index}.png`;
@@ -964,6 +1067,86 @@ assert(firstRequestText.includes("请继续讲解这道题。"), "AI prompt shou
 assert(!firstRequestText.includes("question-stored.png"), "AI prompt must not include stored attachment names.");
 assert(!firstRequestText.includes("attachments/"), "AI prompt must not include attachment relative paths.");
 assert(!firstRequestText.includes("secret-api-key"), "AI prompt must not include API key.");
+
+const pinnedTextSend = assertOk(
+  await services.aiSessionService.sendMessage(createdSessions[2].id, "请根据固定文本解释这道题。", {
+    attachmentTextIds: [
+      attachment.id,
+      attachment.id,
+      otherMistakeTextAttachment.id,
+      emptyTextAttachment.id,
+      failedTextAttachment.id
+    ]
+  })
+);
+const pinnedTextSources = pinnedTextSend.userMessage.sources.filter(
+  (source) => source.sourceKind === "attachmentText"
+);
+assert(pinnedTextSources.length === 1, "Attachment text ids should be filtered and deduplicated.");
+assert(
+  pinnedTextSources[0]?.attachmentId === attachment.id &&
+    pinnedTextSources[0]?.originalName === "question.png" &&
+    pinnedTextSources[0]?.field === "question",
+  "Attachment text source should record only safe current-mistake metadata."
+);
+assert(pinnedTextSend.contextWarning === "none", "Short pinned text should not warn.");
+const pinnedTextRequestText = JSON.stringify(capturedAiRequests[capturedAiRequests.length - 1]?.messages ?? []);
+assert(
+  pinnedTextRequestText.includes("以下是用户固定到当前 AI 会话的附件文本上下文。"),
+  "Pinned attachment text prompt should include the fixed-context disclaimer."
+);
+assert(
+  pinnedTextRequestText.includes("Pinned current attachment text unique."),
+  "Pinned attachment text prompt should include current mistake text."
+);
+assert(
+  pinnedTextRequestText.includes(chineseOcrSample),
+  "Pinned OCR text prompt should preserve Chinese UTF-8 text."
+);
+assert(
+  !pinnedTextRequestText.includes("Cross mistake text must not enter prompt."),
+  "Pinned attachment text prompt must not include another mistake's text."
+);
+assert(
+  !pinnedTextRequestText.includes("FAILED TEXT SHOULD NOT ENTER AI PROMPT"),
+  "Failed attachment text cache must not enter AI prompt."
+);
+assert(!pinnedTextRequestText.includes("data:image"), "Pinned text request must not include image data URLs.");
+assert(!pinnedTextRequestText.includes("image_url"), "Pinned text request must not include image parts.");
+assert(!pinnedTextRequestText.includes("note-stored.txt"), "Pinned text prompt must not include stored names.");
+assert(!pinnedTextRequestText.includes("question-stored.png"), "Pinned OCR text prompt must not include stored image names.");
+assert(!pinnedTextRequestText.includes("attachments/"), "Pinned text prompt must not include relative paths.");
+assertNoSensitiveValues(pinnedTextSend, "Pinned attachment text send DTO");
+
+assertOk(
+  await services.aiSessionService.sendMessage(createdSessions[2].id, "继续详细解释第二步。", {
+    attachmentTextIds: [attachment.id]
+  })
+);
+const secondPinnedTextRequestText = JSON.stringify(capturedAiRequests[capturedAiRequests.length - 1]?.messages ?? []);
+assert(
+  secondPinnedTextRequestText.includes("Pinned current attachment text unique."),
+  "Subsequent pinned text send should still include fixed attachment text."
+);
+
+const longPinnedTextSend = assertOk(
+  await services.aiSessionService.sendMessage(createdSessions[2].id, "请根据长固定文本解释。", {
+    attachmentTextIds: [longTextAttachment.id]
+  })
+);
+assert(
+  longPinnedTextSend.contextWarning === "truncated",
+  "Long pinned attachment text should return a truncated context warning."
+);
+const longPinnedTextRequestText = JSON.stringify(capturedAiRequests[capturedAiRequests.length - 1]?.messages ?? []);
+assert(
+  longPinnedTextRequestText.includes("[本附件文本因过长已截断]"),
+  "Long pinned attachment text should include a stable truncation marker."
+);
+assert(
+  !longPinnedTextRequestText.includes("Pinned long attachment text end"),
+  "Long pinned attachment text should be truncated before the tail."
+);
 
 assert(
   assertFail(
