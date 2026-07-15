@@ -4,6 +4,7 @@ import { userInfo } from "node:os";
 import { join } from "node:path";
 import { OcrRuntimeService } from "../src/main/services/ocrRuntime.service";
 import { OcrEngineRegistry, RapidOcrEngine, TesseractOcrEngine } from "../src/main/services/ocr";
+import { decodeRapidOcrHelperOutput } from "../src/main/services/ocr/rapidOcrEngine";
 import type { OcrEngine, OcrEngineResult } from "../src/main/services/ocr";
 import type { DataDirectoryInfo } from "../src/shared/types";
 
@@ -13,6 +14,7 @@ const root = process.cwd();
 const runtimeRoot = join(root, "resources", "ocr", "rapidocr");
 const fixturePath = join(root, "resources", "ocr", "fixtures", "phase0-zh-en.png");
 const tmpRoot = join(root, ".tmp", `verify-rapidocr-runtime-${randomUUID()}`);
+const chineseOcrSample = "中文测试：函数、导数、答案解析、错题本";
 
 const dataDirectoryInfo: DataDirectoryInfo = {
   path: tmpRoot,
@@ -94,6 +96,51 @@ const verifyRapidEngineFailure = async (status: RapidStatus, label: string): Pro
   assertSafe(result, label);
 };
 
+const verifyUtf8JsonRoundTrip = (): void => {
+  const payload = {
+    ok: true,
+    engine: "rapidocr",
+    engineVersion: "fake",
+    elapsedMs: 1,
+    text: chineseOcrSample,
+    blocks: [
+      {
+        text: chineseOcrSample,
+        confidence: 0.99,
+        box: null
+      }
+    ],
+    warning: null,
+    errorCode: null
+  };
+  const stdout = decodeRapidOcrHelperOutput(Buffer.from(JSON.stringify(payload), "utf8"));
+  const parsed = JSON.parse(stdout) as {
+    text?: unknown;
+    blocks?: Array<{ text?: unknown }>;
+  };
+
+  assert(parsed.text === chineseOcrSample, "UTF-8 helper JSON text was not preserved.");
+  assert(parsed.blocks?.[0]?.text === chineseOcrSample, "UTF-8 helper JSON block text was not preserved.");
+
+  const legacyTextBytes = Buffer.from(
+    "d6d0cec4b2e2cad4a3babaafcafda1a2b5bccafda1a2b4f0b0b8bde2cef6a1a2b4edcce2b1be",
+    "hex"
+  );
+  const legacyStdout = Buffer.concat([
+    Buffer.from('{"ok":true,"text":"', "ascii"),
+    legacyTextBytes,
+    Buffer.from('","blocks":[{"text":"', "ascii"),
+    legacyTextBytes,
+    Buffer.from('"}]}', "ascii")
+  ]);
+  const legacyParsed = JSON.parse(decodeRapidOcrHelperOutput(legacyStdout)) as {
+    text?: unknown;
+    blocks?: Array<{ text?: unknown }>;
+  };
+  assert(legacyParsed.text === chineseOcrSample, "Legacy helper JSON text was not decoded from GBK.");
+  assert(legacyParsed.blocks?.[0]?.text === chineseOcrSample, "Legacy helper JSON block text was not decoded from GBK.");
+};
+
 export default async function verifyRapidOcrRuntime(): Promise<void> {
   let runError: unknown = null;
   try {
@@ -101,6 +148,7 @@ export default async function verifyRapidOcrRuntime(): Promise<void> {
     mkdirSync(dataDirectoryInfo.exportsPath, { recursive: true });
     mkdirSync(dataDirectoryInfo.backupsPath, { recursive: true });
     assert(existsSync(fixturePath), "RapidOCR fixture image is missing.");
+    verifyUtf8JsonRoundTrip();
 
     const runtimeService = new OcrRuntimeService(root);
     const rapidStatus = runtimeService.getRapidOcrStatus();
@@ -178,7 +226,8 @@ export default async function verifyRapidOcrRuntime(): Promise<void> {
             available: rapidStatus.available,
             engineVersion: rapidStatus.engineVersion,
             textLength: rapidResult.text.length,
-            blockCount: rapidResult.blocks.length
+            blockCount: rapidResult.blocks.length,
+            chineseUtf8RoundTrip: true
           },
           fallback: {
             runtimeMissing: true,

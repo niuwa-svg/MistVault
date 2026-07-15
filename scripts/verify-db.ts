@@ -51,6 +51,8 @@ const assertNoSensitiveOcrValues = (value: unknown, message: string): void => {
   assert(!/\bmodels?\\|\bmodels?\//i.test(serialized), `${message}: exposed model path.`);
 };
 
+const chineseOcrSample = "中文测试：函数、导数、答案解析、错题本";
+
 const ocrSuccess = (engine: OcrEngineName, text: string): OcrEngineResult => ({
   ok: true,
   engine,
@@ -467,6 +469,18 @@ const textAttachment = assertOk(
     size: 10
   })
 );
+const chineseCacheWrite = assertOk(
+  services.attachmentTextExtractionService.updateExtractedText(textAttachment.id, chineseOcrSample)
+);
+assert(chineseCacheWrite.extractedText === chineseOcrSample, "Chinese OCR text was not saved through extraction service.");
+const chineseCacheRead = assertOk(services.attachmentTextExtractionService.getExtractedText(textAttachment.id));
+assert(chineseCacheRead.extractedText === chineseOcrSample, "Chinese OCR text was not read back through extraction service.");
+const chineseCacheRow = initializedDatabase.adapter.get<{ extracted_text: string }>(
+  "SELECT extracted_text FROM attachment_text_cache WHERE attachment_id = ?",
+  [textAttachment.id]
+);
+assert(chineseCacheRow?.extracted_text === chineseOcrSample, "Chinese OCR text was not preserved in SQLite cache.");
+assertOk(services.attachmentTextExtractionService.clearExtractedText(textAttachment.id));
 const otherMistakeForAttachment = assertOk(
   services.mistakeService.create({
     nodeId: node.id,
