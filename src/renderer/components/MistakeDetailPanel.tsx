@@ -784,6 +784,7 @@ export const MistakeDetailPanel = ({
   const [aiImagePickerOpen, setAiImagePickerOpen] = useState(false);
   const [aiImageTextStatus, setAiImageTextStatus] = useState<AiImageTextStatus>("idle");
   const [aiImageTextBusy, setAiImageTextBusy] = useState(false);
+  const [pendingDeleteAiSession, setPendingDeleteAiSession] = useState<AiSession | null>(null);
   const [aiError, setAiError] = useState<string | null>(null);
   const [aiCopyMessage, setAiCopyMessage] = useState<string | null>(null);
   const [aiContextWarning, setAiContextWarning] = useState<AiContextWarning>("none");
@@ -941,6 +942,7 @@ export const MistakeDetailPanel = ({
     setAiDraftAppendRequest(null);
     setSelectedAiImageAttachmentIds([]);
     setAiImagePickerOpen(false);
+    setPendingDeleteAiSession(null);
     setAiImageTextStatus("idle");
     setAiImageTextBusy(false);
     setAiError(null);
@@ -1470,6 +1472,7 @@ export const MistakeDetailPanel = ({
       return;
     }
 
+    setPendingDeleteAiSession(null);
     aiMessageRequestSeq.current += 1;
     setActiveAiSession(sessionId);
     setAiMessages([]);
@@ -1487,6 +1490,7 @@ export const MistakeDetailPanel = ({
       return;
     }
 
+    setPendingDeleteAiSession(null);
     setAiSessionBusy(true);
     aiSessionListRequestSeq.current += 1;
     setAiError(null);
@@ -1517,12 +1521,26 @@ export const MistakeDetailPanel = ({
     }
   };
 
-  const deleteAiSession = async (session: AiSession) => {
-    const confirmed = window.confirm(`确定删除“${session.title}”吗？删除会话不会影响错题本体。`);
-    if (!confirmed || aiSessionBusy || aiSending) {
+  const requestDeleteAiSession = (session: AiSession) => {
+    if (aiSessionBusy || aiSending) {
+      return;
+    }
+    setPendingDeleteAiSession(session);
+    setAiError(null);
+    setAiCopyMessage(null);
+  };
+
+  const cancelDeleteAiSession = () => {
+    setPendingDeleteAiSession(null);
+  };
+
+  const confirmDeleteAiSession = async () => {
+    const session = pendingDeleteAiSession;
+    if (!session || aiSessionBusy || aiSending) {
       return;
     }
 
+    setPendingDeleteAiSession(null);
     setAiSessionBusy(true);
     aiSessionListRequestSeq.current += 1;
     aiMessageRequestSeq.current += 1;
@@ -1899,7 +1917,7 @@ export const MistakeDetailPanel = ({
                     <button
                       type="button"
                       className="ai-session-delete"
-                      onClick={() => void deleteAiSession(session)}
+                      onClick={() => requestDeleteAiSession(session)}
                       disabled={aiSessionBusy || aiSending}
                       aria-label={`删除 ${session.title}`}
                     >
@@ -1908,6 +1926,30 @@ export const MistakeDetailPanel = ({
                   </article>
                 ))}
               </div>
+              {pendingDeleteAiSession ? (
+                <div className="ai-delete-confirm" role="dialog" aria-label="删除 AI 会话确认">
+                  <p>
+                    确定删除“{pendingDeleteAiSession.title}”吗？删除会话不会影响错题本体。
+                  </p>
+                  <div>
+                    <button
+                      type="button"
+                      className="danger-action"
+                      onClick={() => void confirmDeleteAiSession()}
+                      disabled={aiSessionBusy || aiSending}
+                    >
+                      确定删除
+                    </button>
+                    <button
+                      type="button"
+                      onClick={cancelDeleteAiSession}
+                      disabled={aiSessionBusy}
+                    >
+                      取消
+                    </button>
+                  </div>
+                </div>
+              ) : null}
             </aside>
 
             <section className="ai-conversation-panel" aria-label="AI 会话消息">
