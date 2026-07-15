@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, rmSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { join } from "node:path";
+import { TextDecoder } from "node:util";
 import type { DataDirectoryInfo } from "@shared/types";
 import type {
   OcrBlock,
@@ -72,21 +73,41 @@ const normalizeBlocks = (value: unknown): OcrBlock[] => {
     .filter((item): item is OcrBlock => item !== null);
 };
 
-const appendLimited = (
-  current: string,
-  chunk: unknown,
-  limitBytes: number
-): { value: string; exceeded: boolean } => {
-  const next = current + String(chunk);
-  const buffer = Buffer.from(next, "utf8");
-  if (buffer.length <= limitBytes) {
-    return { value: next, exceeded: false };
+const hasReplacementCharacter = (value: string): boolean => value.includes("\uFFFD");
+
+export const decodeRapidOcrHelperOutput = (buffer: Buffer): string => {
+  const utf8 = buffer.toString("utf8");
+  if (!hasReplacementCharacter(utf8)) {
+    return utf8;
   }
 
-  return {
-    value: buffer.subarray(0, limitBytes).toString("utf8"),
-    exceeded: true
-  };
+  try {
+    const legacyDecoded = new TextDecoder("gbk").decode(buffer);
+    return hasReplacementCharacter(legacyDecoded) ? utf8 : legacyDecoded;
+  } catch {
+    return utf8;
+  }
+};
+
+const appendLimitedBuffer = (
+  chunks: Buffer[],
+  currentBytes: number,
+  chunk: unknown,
+  limitBytes: number
+): { bytes: number; exceeded: boolean } => {
+  const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf8");
+  const remainingBytes = limitBytes - currentBytes;
+  if (remainingBytes <= 0) {
+    return { bytes: currentBytes, exceeded: true };
+  }
+
+  if (buffer.length <= remainingBytes) {
+    chunks.push(buffer);
+    return { bytes: currentBytes + buffer.length, exceeded: false };
+  }
+
+  chunks.push(buffer.subarray(0, remainingBytes));
+  return { bytes: limitBytes, exceeded: true };
 };
 
 export class RapidOcrEngine implements OcrEngine {
@@ -132,8 +153,10 @@ export class RapidOcrEngine implements OcrEngine {
       const controlledPath = [runtime.runtimePath, join(systemRoot, "System32"), systemRoot].join(";");
       let settled = false;
       let timedOut = false;
-      let stdout = "";
-      let stderr = "";
+      const stdoutChunks: Buffer[] = [];
+      const stderrChunks: Buffer[] = [];
+      let stdoutBytes = 0;
+      let stderrBytes = 0;
       let stdoutExceeded = false;
       let stderrExceeded = false;
 
@@ -154,6 +177,7 @@ export class RapidOcrEngine implements OcrEngine {
             WINDIR: process.env.WINDIR ?? systemRoot,
             PATH: controlledPath,
             PYTHONIOENCODING: "utf-8",
+            PYTHONUTF8: "1",
             TEMP: tmpDirectory,
             TMP: tmpDirectory
           },
@@ -169,16 +193,14 @@ export class RapidOcrEngine implements OcrEngine {
         child.kill();
       }, options.timeoutMs);
 
-      child.stdout.setEncoding("utf8");
-      child.stderr.setEncoding("utf8");
       child.stdout.on("data", (chunk) => {
-        const next = appendLimited(stdout, chunk, stdoutLimitBytes);
-        stdout = next.value;
+        const next = appendLimitedBuffer(stdoutChunks, stdoutBytes, chunk, stdoutLimitBytes);
+        stdoutBytes = next.bytes;
         stdoutExceeded ||= next.exceeded;
       });
       child.stderr.on("data", (chunk) => {
-        const next = appendLimited(stderr, chunk, stderrLimitBytes);
-        stderr = next.value;
+        const next = appendLimitedBuffer(stderrChunks, stderrBytes, chunk, stderrLimitBytes);
+        stderrBytes = next.bytes;
         stderrExceeded ||= next.exceeded;
       });
       child.on("error", () => {
@@ -196,6 +218,8 @@ export class RapidOcrEngine implements OcrEngine {
           finish(makeFailure("EXTRACTION_OCR_FAILED", "RapidOCR helper output was too large.", elapsedMs, runtime.engineVersion));
           return;
         }
+        const stdout = decodeRapidOcrHelperOutput(Buffer.concat(stdoutChunks, stdoutBytes));
+        const stderr = decodeRapidOcrHelperOutput(Buffer.concat(stderrChunks, stderrBytes));
         if (code !== 0) {
           finish(
             makeFailure(
