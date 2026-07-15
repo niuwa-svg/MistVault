@@ -993,6 +993,29 @@ button:disabled {
   margin: 0;
 }
 
+.attachment-clear-confirm {
+  background: var(--danger-soft);
+  border: 1px solid var(--danger);
+  border-radius: 7px;
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+}
+
+.attachment-clear-confirm p {
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.attachment-clear-confirm > div {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .attachment-extracted-text {
   display: grid;
   gap: 8px;

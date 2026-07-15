@@ -389,6 +389,7 @@ const AttachmentTextExtractionPanel = ({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [copyMessage, setCopyMessage] = useState<string | null>(null);
 
@@ -464,6 +465,7 @@ const AttachmentTextExtractionPanel = ({
     setDraft("");
     setMessage(null);
     setCopyMessage(null);
+    setClearConfirmOpen(false);
     setBusy(false);
 
     if (!supported) {
@@ -617,11 +619,20 @@ const AttachmentTextExtractionPanel = ({
     }
   };
 
-  const clearText = async () => {
-    const confirmed = window.confirm("确定清除该附件的提取文本吗？原附件文件不会被删除。");
-    if (!confirmed) {
+  const requestClearText = () => {
+    if (busy) {
       return;
     }
+    setClearConfirmOpen(true);
+    setMessage(null);
+    setCopyMessage(null);
+  };
+
+  const confirmClearText = async () => {
+    if (busy) {
+      return;
+    }
+    setClearConfirmOpen(false);
     setBusy(true);
     setMessage(null);
     const cleared = await mistVaultApi.extensions.extraction.clearExtractedText(attachmentId);
@@ -685,7 +696,7 @@ const AttachmentTextExtractionPanel = ({
             <button type="button" onClick={() => void extract(true)} disabled={busy}>
               重新提取
             </button>
-            <button type="button" onClick={() => void clearText()} disabled={busy}>
+            <button type="button" onClick={requestClearText} disabled={busy}>
               清除提取文本
             </button>
           </>
@@ -696,6 +707,19 @@ const AttachmentTextExtractionPanel = ({
           </button>
         ) : null}
       </div>
+      {clearConfirmOpen ? (
+        <div className="attachment-clear-confirm" role="dialog" aria-modal="true" aria-label="清除提取文本确认">
+          <p>确定清除该附件的提取文本吗？原附件文件不会被删除。</p>
+          <div>
+            <button type="button" className="danger-action" onClick={() => void confirmClearText()} disabled={busy}>
+              确定清除
+            </button>
+            <button type="button" onClick={() => setClearConfirmOpen(false)} disabled={busy}>
+              取消
+            </button>
+          </div>
+        </div>
+      ) : null}
       {message ? <p className="state-text compact-state state-warning">{message}</p> : null}
       {copyMessage ? <p className="state-text compact-state">{copyMessage}</p> : null}
       {expanded && result ? (
