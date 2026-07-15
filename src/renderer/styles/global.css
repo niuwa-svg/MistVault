@@ -759,6 +759,7 @@ button:disabled {
 }
 
 .ai-selected-images,
+.ai-pinned-context-list,
 .ai-message-sources ul {
   display: grid;
   gap: 6px;
@@ -768,6 +769,7 @@ button:disabled {
 }
 
 .ai-selected-images li,
+.ai-pinned-context-list li,
 .ai-message-sources li {
   align-items: center;
   border: 1px solid var(--border);
@@ -780,10 +782,47 @@ button:disabled {
 }
 
 .ai-selected-images span,
+.ai-pinned-context-list span,
 .ai-message-sources span,
 .ai-message-sources small {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.ai-pinned-context {
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+}
+
+.ai-pinned-context-head {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.ai-pinned-context-head > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.ai-pinned-context-head span {
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.ai-pinned-context-manager {
+  border-top: 1px solid var(--border);
+  display: grid;
+  gap: 8px;
+  max-height: 260px;
+  overflow-y: auto;
+  padding-top: 8px;
 }
 
 .ai-image-picker {
@@ -803,7 +842,8 @@ button:disabled {
   gap: 8px;
 }
 
-.ai-image-option {
+.ai-image-option,
+.ai-pinned-context-option {
   align-items: flex-start;
   border: 1px solid var(--border);
   border-radius: 7px;
@@ -812,14 +852,17 @@ button:disabled {
   padding: 8px;
 }
 
-.ai-image-option > span {
+.ai-image-option > span,
+.ai-pinned-context-option > span {
   display: grid;
   gap: 3px;
   min-width: 0;
 }
 
 .ai-image-option strong,
-.ai-image-option small {
+.ai-image-option small,
+.ai-pinned-context-option strong,
+.ai-pinned-context-option small {
   overflow-wrap: anywhere;
 }
 

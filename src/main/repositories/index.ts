@@ -8,3 +8,4 @@ export { ReviewRepository } from "./review.repository";
 export { SettingsRepository } from "./settings.repository";
 export type { MistakeRecord } from "./mistakes.repository";
 export type { ReviewState } from "./review.repository";
+export type { AttachmentExtractedTextForAi } from "./attachmentTextCache.repository";

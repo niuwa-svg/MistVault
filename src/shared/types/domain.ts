@@ -387,6 +387,7 @@ export type AiSendMessageResult = {
 
 export type AiSendMessageOptions = {
   imageAttachmentIds?: EntityId[];
+  attachmentTextIds?: EntityId[];
 };
 
 export type AiImageInputTransport = "base64DataUrl";

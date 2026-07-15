@@ -48,9 +48,13 @@ const normalizeAiSendMessageOptions = (options: unknown): AiSendMessageOptions =
   }
 
   const imageAttachmentIds = (options as { imageAttachmentIds?: unknown }).imageAttachmentIds;
+  const attachmentTextIds = (options as { attachmentTextIds?: unknown }).attachmentTextIds;
   return {
     imageAttachmentIds: Array.isArray(imageAttachmentIds)
       ? imageAttachmentIds.filter((item): item is string => typeof item === "string" && Boolean(item.trim()))
+      : undefined,
+    attachmentTextIds: Array.isArray(attachmentTextIds)
+      ? attachmentTextIds.filter((item): item is string => typeof item === "string" && Boolean(item.trim()))
       : undefined
   };
 };

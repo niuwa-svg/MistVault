@@ -42,8 +42,11 @@ export type SaveAttachmentTextCacheInput = {
 };
 
 export type AttachmentExtractedTextForAi = {
+  attachmentId?: string;
   field: Attachment["field"];
   originalName: string;
+  sourceType?: AttachmentTextSourceType;
+  isEdited?: boolean;
   extractedText: string;
 };
 
@@ -163,6 +166,53 @@ export class AttachmentTextCacheRepository {
     ).map((row) => ({
       field: row.field,
       originalName: row.original_name,
+      extractedText: row.extracted_text
+    }));
+  }
+
+  listSuccessfulTextsByAttachmentIds(
+    mistakeId: string,
+    attachmentIds: string[]
+  ): AttachmentExtractedTextForAi[] {
+    const uniqueIds = Array.from(new Set(attachmentIds.map((id) => id.trim()).filter(Boolean)));
+    if (uniqueIds.length === 0) {
+      return [];
+    }
+
+    const placeholders = uniqueIds.map(() => "?").join(", ");
+    return this.adapter.all<{
+      attachment_id: string;
+      field: Attachment["field"];
+      original_name: string;
+      source_type: AttachmentTextSourceType;
+      is_edited: number;
+      extracted_text: string;
+    }>(
+      `
+        SELECT
+          a.id AS attachment_id,
+          a.field,
+          a.original_name,
+          c.source_type,
+          c.is_edited,
+          c.extracted_text
+        FROM attachment_text_cache c
+        INNER JOIN attachments a
+          ON a.id = c.attachment_id
+        WHERE a.mistake_id = ?
+          AND a.deleted_at IS NULL
+          AND c.extraction_status = 'success'
+          AND TRIM(c.extracted_text) <> ''
+          AND a.id IN (${placeholders})
+        ORDER BY a.created_at, a.original_name
+      `,
+      [mistakeId, ...uniqueIds]
+    ).map((row) => ({
+      attachmentId: row.attachment_id,
+      field: row.field,
+      originalName: row.original_name,
+      sourceType: row.source_type,
+      isEdited: row.is_edited === 1,
       extractedText: row.extracted_text
     }));
   }

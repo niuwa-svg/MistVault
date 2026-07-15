@@ -80,6 +80,13 @@ type AiDraftAppendRequest = {
   id: number;
   text: string;
 };
+type AiAttachmentTextOption = {
+  attachmentId: string;
+  originalName: string;
+  field: AttachmentField;
+  sourceLabel: string;
+  textLength: number;
+};
 
 type AiSessionComposerProps = {
   activeSessionId: string | null;
@@ -147,6 +154,23 @@ const aiImageAttachmentExts = new Set(["jpg", "jpeg", "png", "webp", "bmp"]);
 const aiImageAttachmentMimeTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/bmp"]);
 const maxAiSessionsPerMistake = 5;
 const maxAiUserMessageChars = 8000;
+
+const attachmentFieldLabels: Record<AttachmentField, string> = {
+  question: "题目",
+  answerAnalysis: "答案解析",
+  note: "备注",
+  general: "历史附件"
+};
+
+const getAttachmentTextSourceLabel = (result: AttachmentTextResult): string => {
+  if (result.isEdited) {
+    return "手动修正";
+  }
+  if (result.sourceType === "ocr") {
+    return "OCR";
+  }
+  return "文本提取";
+};
 
 const contextWarningMessages: Record<AiContextWarning, string | null> = {
   none: null,
@@ -808,6 +832,11 @@ export const MistakeDetailPanel = ({
   const [aiImagePickerOpen, setAiImagePickerOpen] = useState(false);
   const [aiImageTextStatus, setAiImageTextStatus] = useState<AiImageTextStatus>("idle");
   const [aiImageTextBusy, setAiImageTextBusy] = useState(false);
+  const [aiAttachmentTextOptions, setAiAttachmentTextOptions] = useState<AiAttachmentTextOption[]>([]);
+  const [aiAttachmentTextOptionsLoading, setAiAttachmentTextOptionsLoading] = useState(false);
+  const [aiPinnedTextManagerOpen, setAiPinnedTextManagerOpen] = useState(false);
+  const [pinnedAttachmentTextIdsBySession, setPinnedAttachmentTextIdsBySession] =
+    useState<Record<string, string[]>>({});
   const [pendingDeleteAiSession, setPendingDeleteAiSession] = useState<AiSession | null>(null);
   const [aiError, setAiError] = useState<string | null>(null);
   const [aiCopyMessage, setAiCopyMessage] = useState<string | null>(null);
@@ -851,6 +880,17 @@ export const MistakeDetailPanel = ({
         .map((id) => aiImageAttachments.find((attachment) => attachment.id === id))
         .filter((attachment): attachment is Attachment => Boolean(attachment)),
     [aiImageAttachments, selectedAiImageAttachmentIds]
+  );
+  const pinnedAttachmentTextIds = useMemo(
+    () => (activeAiSessionId ? pinnedAttachmentTextIdsBySession[activeAiSessionId] ?? [] : []),
+    [activeAiSessionId, pinnedAttachmentTextIdsBySession]
+  );
+  const pinnedAttachmentTextOptions = useMemo(
+    () =>
+      pinnedAttachmentTextIds
+        .map((id) => aiAttachmentTextOptions.find((option) => option.attachmentId === id))
+        .filter((option): option is AiAttachmentTextOption => Boolean(option)),
+    [aiAttachmentTextOptions, pinnedAttachmentTextIds]
   );
   const setActiveAiSession = (sessionId: string | null) => {
     activeAiSessionIdRef.current = sessionId;
@@ -905,6 +945,76 @@ export const MistakeDetailPanel = ({
       current.filter((attachmentId) => validImageIds.has(attachmentId))
     );
   }, [aiImageAttachments]);
+
+  useEffect(() => {
+    let active = true;
+    const requestMistakeId = mistake?.id ?? null;
+
+    const loadAttachmentTextOptions = async () => {
+      if (mode !== "view" || !requestMistakeId || attachments.length === 0) {
+        setAiAttachmentTextOptions([]);
+        return;
+      }
+
+      setAiAttachmentTextOptionsLoading(true);
+      const options: AiAttachmentTextOption[] = [];
+      try {
+        for (const attachment of attachments) {
+          const status = await mistVaultApi.extensions.extraction.getStatus(attachment.id);
+          if (!active || currentMistakeIdRef.current !== requestMistakeId) {
+            return;
+          }
+          if (!status.ok || status.data.status !== "success" || !status.data.hasText) {
+            continue;
+          }
+
+          const text = await mistVaultApi.extensions.extraction.getExtractedText(attachment.id);
+          if (!active || currentMistakeIdRef.current !== requestMistakeId) {
+            return;
+          }
+          const normalized = text.ok ? text.data.extractedText.trim() : "";
+          if (!text.ok || !normalized) {
+            continue;
+          }
+
+          options.push({
+            attachmentId: attachment.id,
+            originalName: attachment.originalName,
+            field: attachment.field,
+            sourceLabel: getAttachmentTextSourceLabel(text.data),
+            textLength: normalized.length
+          });
+        }
+
+        if (active && currentMistakeIdRef.current === requestMistakeId) {
+          setAiAttachmentTextOptions(options);
+        }
+      } finally {
+        if (active && currentMistakeIdRef.current === requestMistakeId) {
+          setAiAttachmentTextOptionsLoading(false);
+        }
+      }
+    };
+
+    void loadAttachmentTextOptions();
+    return () => {
+      active = false;
+    };
+  }, [attachments, mistake?.id, mode]);
+
+  useEffect(() => {
+    const validTextIds = new Set(aiAttachmentTextOptions.map((option) => option.attachmentId));
+    setPinnedAttachmentTextIdsBySession((current) => {
+      let changed = false;
+      const next: Record<string, string[]> = {};
+      for (const [sessionId, ids] of Object.entries(current)) {
+        const validIds = ids.filter((id) => validTextIds.has(id));
+        next[sessionId] = validIds;
+        changed = changed || validIds.length !== ids.length;
+      }
+      return changed ? next : current;
+    });
+  }, [aiAttachmentTextOptions]);
 
   useEffect(() => {
     if (!currentAiImageCapability || currentAiImageCapability.supportsImageInput) {
@@ -966,6 +1076,10 @@ export const MistakeDetailPanel = ({
     setAiDraftAppendRequest(null);
     setSelectedAiImageAttachmentIds([]);
     setAiImagePickerOpen(false);
+    setAiAttachmentTextOptions([]);
+    setAiAttachmentTextOptionsLoading(false);
+    setAiPinnedTextManagerOpen(false);
+    setPinnedAttachmentTextIdsBySession({});
     setPendingDeleteAiSession(null);
     setAiImageTextStatus("idle");
     setAiImageTextBusy(false);
@@ -1645,6 +1759,34 @@ export const MistakeDetailPanel = ({
     });
   };
 
+  const togglePinnedAttachmentText = (attachmentTextId: string) => {
+    if (!activeAiSessionId) {
+      return;
+    }
+
+    setPinnedAttachmentTextIdsBySession((current) => {
+      const currentIds = current[activeAiSessionId] ?? [];
+      const nextIds = currentIds.includes(attachmentTextId)
+        ? currentIds.filter((id) => id !== attachmentTextId)
+        : [...currentIds, attachmentTextId];
+      return {
+        ...current,
+        [activeAiSessionId]: nextIds
+      };
+    });
+  };
+
+  const clearPinnedAttachmentTexts = () => {
+    if (!activeAiSessionId) {
+      return;
+    }
+
+    setPinnedAttachmentTextIdsBySession((current) => ({
+      ...current,
+      [activeAiSessionId]: []
+    }));
+  };
+
   const appendImageExtractedTextToAiInput = async () => {
     if (aiImageTextBusy || aiImageAttachments.length === 0) {
       return;
@@ -1725,6 +1867,9 @@ export const MistakeDetailPanel = ({
     const selectedImageIds = selectedAiImageAttachmentIds.filter((id) =>
       aiImageAttachments.some((attachment) => attachment.id === id)
     );
+    const selectedAttachmentTextIds = pinnedAttachmentTextIds.filter((id) =>
+      aiAttachmentTextOptions.some((option) => option.attachmentId === id)
+    );
     if (selectedImageIds.length > 0) {
       const imageCapabilityMessage = getAiImageCapabilityMessage();
       if (imageCapabilityMessage) {
@@ -1783,7 +1928,19 @@ export const MistakeDetailPanel = ({
         ext: attachment.ext || normalizeAttachmentExt(attachment),
         size: attachment.size,
         field: attachment.field
-      }))
+      })).concat(
+        pinnedAttachmentTextOptions.map((option, index) => ({
+          id: `local-text-source-${now}-${index}`,
+          messageId: `local-user-${now}`,
+          sourceKind: "attachmentText" as const,
+          attachmentId: option.attachmentId,
+          originalName: option.originalName,
+          mimeType: null,
+          ext: null,
+          size: option.textLength,
+          field: option.field
+        }))
+      )
     };
     const optimisticAssistantMessage: AiMessage = {
       id: `local-assistant-${now}`,
@@ -1813,7 +1970,12 @@ export const MistakeDetailPanel = ({
       const result = await mistVaultApi.extensions.ai.sessions.sendMessage(
         requestSessionId,
         content,
-        selectedImageIds.length > 0 ? { imageAttachmentIds: selectedImageIds } : undefined
+        selectedImageIds.length > 0 || selectedAttachmentTextIds.length > 0
+          ? {
+              imageAttachmentIds: selectedImageIds.length > 0 ? selectedImageIds : undefined,
+              attachmentTextIds: selectedAttachmentTextIds.length > 0 ? selectedAttachmentTextIds : undefined
+            }
+          : undefined
       );
       if (currentMistakeIdRef.current !== requestMistakeId) {
         return false;
@@ -1850,25 +2012,47 @@ export const MistakeDetailPanel = ({
 
   const renderAiMessageSources = (message: AiMessage) => {
     const imageSources = message.sources.filter((source) => source.sourceKind === "imageAttachment");
-    if (imageSources.length === 0) {
+    const textSources = message.sources.filter((source) => source.sourceKind === "attachmentText");
+    if (imageSources.length === 0 && textSources.length === 0) {
       return null;
     }
 
     return (
       <div className="ai-message-sources">
-        <strong>本次随消息发送了 {imageSources.length} 个图片附件</strong>
-        <ul>
-          {imageSources.map((source) => (
-            <li key={source.id}>
-              <span>{source.originalName || "图片附件"}</span>
-              <small>
-                {[source.field, source.size !== null ? formatSize(source.size) : null, source.ext || source.mimeType]
-                  .filter(Boolean)
-                  .join(" · ")}
-              </small>
-            </li>
-          ))}
-        </ul>
+        {imageSources.length > 0 ? (
+          <>
+            <strong>本次随消息发送了 {imageSources.length} 个图片附件</strong>
+            <ul>
+              {imageSources.map((source) => (
+                <li key={source.id}>
+                  <span>{source.originalName || "图片附件"}</span>
+                  <small>
+                    {[source.field, source.size !== null ? formatSize(source.size) : null, source.ext || source.mimeType]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </small>
+                </li>
+              ))}
+            </ul>
+          </>
+        ) : null}
+        {textSources.length > 0 ? (
+          <>
+            <strong>本次消息使用了 {textSources.length} 个附件文本</strong>
+            <ul>
+              {textSources.map((source) => (
+                <li key={source.id}>
+                  <span>{source.originalName || "附件文本"}</span>
+                  <small>
+                    {[source.field ? attachmentFieldLabels[source.field] : null, source.size !== null ? `${source.size} 字` : null]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </small>
+                </li>
+              ))}
+            </ul>
+          </>
+        ) : null}
       </div>
     );
   };
@@ -2061,6 +2245,13 @@ export const MistakeDetailPanel = ({
                     >
                       选择图片附件给 AI 分析
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => setAiPinnedTextManagerOpen((current) => !current)}
+                      disabled={!activeAiSessionId || aiSending}
+                    >
+                      管理固定上下文
+                    </button>
                     {imageInputUnsupported ? <span>当前模型不支持直接读图</span> : null}
                     {selectedAiImageAttachments.length > 0 ? (
                       <span>
@@ -2068,9 +2259,77 @@ export const MistakeDetailPanel = ({
                         {maxImagesPerRequest > 0 ? `/${maxImagesPerRequest}` : ""} 张
                       </span>
                     ) : null}
+                    <span>已固定 {pinnedAttachmentTextOptions.length} 个附件文本</span>
                   </div>
                 }
               >
+                <div className="ai-pinned-context">
+                  <div className="ai-pinned-context-head">
+                    <div>
+                      <strong>会话固定上下文</strong>
+                      <span>仅当前打开期间有效；切换会话不继承。</span>
+                    </div>
+                    {pinnedAttachmentTextOptions.length > 0 ? (
+                      <button type="button" onClick={clearPinnedAttachmentTexts} disabled={aiSending}>
+                        取消固定
+                      </button>
+                    ) : null}
+                  </div>
+                  <p className="state-text compact-state">
+                    图片附件默认只随本次消息发送。若希望后续追问继续引用，请先 OCR / 文本提取后固定文本到本会话。
+                  </p>
+                  {pinnedAttachmentTextOptions.length > 0 ? (
+                    <ul className="ai-pinned-context-list">
+                      {pinnedAttachmentTextOptions.map((option) => (
+                        <li key={option.attachmentId}>
+                          <span>
+                            {option.originalName} · {attachmentFieldLabels[option.field]} · {option.sourceLabel} · {option.textLength} 字
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => togglePinnedAttachmentText(option.attachmentId)}
+                            disabled={aiSending}
+                          >
+                            取消固定
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="state-text compact-state">当前会话还没有固定附件文本。</p>
+                  )}
+                  {aiPinnedTextManagerOpen ? (
+                    <div className="ai-pinned-context-manager">
+                      {aiAttachmentTextOptionsLoading ? (
+                        <p className="state-text compact-state">正在检查可固定的附件文本...</p>
+                      ) : null}
+                      {!aiAttachmentTextOptionsLoading && aiAttachmentTextOptions.length === 0 ? (
+                        <p className="state-text compact-state">
+                          当前错题还没有成功 OCR / 文本提取且非空的附件文本。
+                        </p>
+                      ) : null}
+                      {aiAttachmentTextOptions.map((option) => {
+                        const checked = pinnedAttachmentTextIds.includes(option.attachmentId);
+                        return (
+                          <label key={option.attachmentId} className="ai-pinned-context-option">
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              disabled={aiSending}
+                              onChange={() => togglePinnedAttachmentText(option.attachmentId)}
+                            />
+                            <span>
+                              <strong>{option.originalName}</strong>
+                              <small>
+                                {attachmentFieldLabels[option.field]} · {option.sourceLabel} · {option.textLength} 字 · {checked ? "已固定" : "未固定"}
+                              </small>
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                </div>
                 {imageCapabilityMessage ? (
                   <p className="state-text compact-state state-warning">{imageCapabilityMessage}</p>
                 ) : null}
