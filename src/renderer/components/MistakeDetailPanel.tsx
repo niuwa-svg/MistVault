@@ -400,10 +400,12 @@ const AttachmentPreview = ({ attachment, t }: { attachment: Attachment; t: Mista
 
 const AttachmentTextExtractionPanel = ({
   attachment,
-  activeAttachmentIds
+  activeAttachmentIds,
+  onTextCacheChanged
 }: {
   attachment: Attachment;
   activeAttachmentIds: ReadonlySet<string>;
+  onTextCacheChanged?: () => void;
 }) => {
   const supported = isExtractionSupported(attachment);
   const isOcr = isOcrAttachment(attachment);
@@ -584,6 +586,7 @@ const AttachmentTextExtractionPanel = ({
       }
       setExpanded(true);
       setEditing(false);
+      onTextCacheChanged?.();
     } else {
       applyFailedStatus(extracted.error.code, extracted.error.message);
     }
@@ -624,6 +627,7 @@ const AttachmentTextExtractionPanel = ({
       setEditing(false);
       setExpanded(true);
       setMessage("修正文本已保存。");
+      onTextCacheChanged?.();
     } else {
       setMessage(extractionErrorMessage(saved.error.code, saved.error.message));
     }
@@ -670,6 +674,7 @@ const AttachmentTextExtractionPanel = ({
       setExpanded(false);
       setEditing(false);
       setMessage("提取文本已清除。");
+      onTextCacheChanged?.();
     } else {
       setMessage(extractionErrorMessage(cleared.error.code, cleared.error.message));
     }
@@ -834,6 +839,7 @@ export const MistakeDetailPanel = ({
   const [aiImageTextBusy, setAiImageTextBusy] = useState(false);
   const [aiAttachmentTextOptions, setAiAttachmentTextOptions] = useState<AiAttachmentTextOption[]>([]);
   const [aiAttachmentTextOptionsLoading, setAiAttachmentTextOptionsLoading] = useState(false);
+  const [aiAttachmentTextRefreshSeq, setAiAttachmentTextRefreshSeq] = useState(0);
   const [aiPinnedTextManagerOpen, setAiPinnedTextManagerOpen] = useState(false);
   const [pinnedAttachmentTextIdsBySession, setPinnedAttachmentTextIdsBySession] =
     useState<Record<string, string[]>>({});
@@ -1000,7 +1006,7 @@ export const MistakeDetailPanel = ({
     return () => {
       active = false;
     };
-  }, [attachments, mistake?.id, mode]);
+  }, [aiAttachmentTextRefreshSeq, attachments, mistake?.id, mode]);
 
   useEffect(() => {
     const validTextIds = new Set(aiAttachmentTextOptions.map((option) => option.attachmentId));
@@ -1078,6 +1084,7 @@ export const MistakeDetailPanel = ({
     setAiImagePickerOpen(false);
     setAiAttachmentTextOptions([]);
     setAiAttachmentTextOptionsLoading(false);
+    setAiAttachmentTextRefreshSeq(0);
     setAiPinnedTextManagerOpen(false);
     setPinnedAttachmentTextIdsBySession({});
     setPendingDeleteAiSession(null);
@@ -2434,7 +2441,11 @@ export const MistakeDetailPanel = ({
               <strong>{attachment.originalName}</strong>
               <span>{formatSize(attachment.size)} · {attachment.ext || attachment.mimeType || t("attachments")}</span>
               <AttachmentPreview attachment={attachment} t={t} />
-              <AttachmentTextExtractionPanel attachment={attachment} activeAttachmentIds={activeAttachmentIds} />
+              <AttachmentTextExtractionPanel
+                attachment={attachment}
+                activeAttachmentIds={activeAttachmentIds}
+                onTextCacheChanged={() => setAiAttachmentTextRefreshSeq((current) => current + 1)}
+              />
             </div>
             <div className="detail-actions">
               <button type="button" onClick={() => void openAttachment(attachment)}>

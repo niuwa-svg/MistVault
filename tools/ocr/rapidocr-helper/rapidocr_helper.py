@@ -24,6 +24,21 @@ _DLL_DIRECTORY_HANDLES: list[object] = []
 _DLL_LIBRARY_HANDLES: list[object] = []
 
 
+def _configure_process_encoding() -> None:
+    os.environ.setdefault("PYTHONUTF8", "1")
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(encoding="utf-8")
+            except Exception:
+                pass
+
+
+_configure_process_encoding()
+
+
 def _runtime_root() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
@@ -58,6 +73,7 @@ def _run_embedded_python_child(argv: list[str]) -> int:
     env["PYTHONHOME"] = str(python_root)
     env["PYTHONPATH"] = str(site_packages)
     env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
     env["MISTVAULT_RAPIDOCR_HELPER_CHILD"] = "1"
 
     try:
