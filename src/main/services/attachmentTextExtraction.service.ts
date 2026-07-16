@@ -13,6 +13,7 @@ import type {
 } from "@shared/types";
 import type { AttachmentTextCacheRepository, AttachmentsRepository } from "../repositories";
 import { serviceFail, serviceOk } from "./serviceResult";
+import { cleanupOcrText } from "./ocr";
 import type { OcrEngineRegistry } from "./ocr";
 
 type ResolvedAttachment = {
@@ -581,7 +582,7 @@ export class AttachmentTextExtractionService {
       { timeoutMs: ocrTimeoutMs }
     );
     if (result.ok) {
-      return result.text;
+      return cleanupOcrText(result.text);
     }
 
     const code = result.errorCode ?? "EXTRACTION_OCR_FAILED";

@@ -12,7 +12,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { AttachmentTextExtractionService } from "../src/main/services/attachmentTextExtraction.service";
-import { OcrEngineRegistry, TesseractOcrEngine } from "../src/main/services/ocr";
+import { cleanupOcrText, OcrEngineRegistry, TesseractOcrEngine } from "../src/main/services/ocr";
 import type { OcrEngine, OcrEngineResult } from "../src/main/services/ocr";
 import type {
   ApiResult,
@@ -129,6 +129,8 @@ const checksByMode: Record<string, string[]> = {
     "errorRedaction"
   ],
   ocr: [
+    "ocrTextCleanup",
+    "ocrCleanupAppliedToImageOnly",
     "ocrDisabled",
     "ocrDisabledSkipsRegistry",
     "ocrDisabledTextUnaffected",
@@ -202,6 +204,17 @@ const ocrFailure = (engine: "rapidocr" | "tesseract"): OcrEngineResult => ({
   message: "OCR failed."
 });
 
+const ocrSuccess = (text: string): OcrEngineResult => ({
+  ok: true,
+  engine: "rapidocr",
+  engineVersion: "verify-ocr-cleanup",
+  elapsedMs: 1,
+  text,
+  blocks: [],
+  warning: null,
+  errorCode: null
+});
+
 const createCountingOcrRegistry = (): { registry: Pick<OcrEngineRegistry, "recognize">; calls: number } => {
   const counter = {
     calls: 0,
@@ -209,6 +222,19 @@ const createCountingOcrRegistry = (): { registry: Pick<OcrEngineRegistry, "recog
       recognize: async (): Promise<OcrEngineResult> => {
         counter.calls += 1;
         return ocrFailure("rapidocr");
+      }
+    }
+  };
+  return counter;
+};
+
+const createTextOcrRegistry = (text: string): { registry: Pick<OcrEngineRegistry, "recognize">; calls: number } => {
+  const counter = {
+    calls: 0,
+    registry: {
+      recognize: async (): Promise<OcrEngineResult> => {
+        counter.calls += 1;
+        return ocrSuccess(text);
       }
     }
   };
@@ -338,6 +364,36 @@ const assertOcrText = (text: string, label: string): void => {
   assert(text.includes("MistVault"), `${label} OCR did not include expected fixture text.`);
 };
 
+const assertOcrTextCleanup = (): void => {
+  const dirty = [
+    "  函 数   f ( x ) 在 区 间  ",
+    " 上 连 续 ， 求  x ^ 2  与  x _ 1 ",
+    "",
+    "",
+    "",
+    "A.  选 项 甲  x_{1}^{2}",
+    "B、  选 项 乙  ≤ ≥ ≠ ≈ ∑ ∫ √ π θ α β",
+    "（C） box Open label xylophone",
+    "①  第 一 步",
+    "1.  第 二 步"
+  ].join("\r\n");
+  const cleaned = cleanupOcrText(dirty);
+  const lines = cleaned.split("\n");
+
+  assert(cleaned.includes("函数 f(x) 在区间 上连续，求 x^2 与 x_1"), "OCR cleanup should normalize Chinese and math spacing.");
+  assert(!cleaned.includes("\n\n\n"), "OCR cleanup should fold 3+ blank lines.");
+  assert(lines.some((line) => line.startsWith("A. 选项甲 x_{1}^{2}")), "OCR cleanup should keep A option on its own line.");
+  assert(lines.some((line) => line.startsWith("B、 选项乙")), "OCR cleanup should keep B option on its own line.");
+  assert(lines.some((line) => line.startsWith("（C） box Open label xylophone")), "OCR cleanup should keep parenthesized option lines.");
+  assert(lines.some((line) => line.startsWith("① 第一步")), "OCR cleanup should keep circled step lines.");
+  assert(lines.some((line) => line.startsWith("1. 第二步")), "OCR cleanup should keep numbered step lines.");
+  assert(cleaned.includes("box Open label xylophone"), "OCR cleanup should not rewrite ordinary English x/O/l characters.");
+  for (const symbol of ["≤", "≥", "≠", "≈", "∑", "∫", "√", "π", "θ", "α", "β"]) {
+    assert(cleaned.includes(symbol), `OCR cleanup should preserve math symbol ${symbol}.`);
+  }
+  assert(cleaned.includes("x_{1}^{2}"), "OCR cleanup should not break LaTeX-like text.");
+};
+
 const sleep = (ms: number): void => {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 };
@@ -449,6 +505,35 @@ export default async function verifyExtractionStage1A(): Promise<void> {
     }
 
     if (shouldRun("ocr")) {
+      assertOcrTextCleanup();
+
+      const dirtyOcrText = "函 数   f ( x ) 在 区 间\r\n上 连 续\r\n\r\n\r\nA.  选 项 一";
+      const cleanOcrRegistry = createTextOcrRegistry(dirtyOcrText);
+      const cleanOcrService = createService({
+        ocrRegistry: cleanOcrRegistry.registry
+      });
+      const cleanOcrAttachment = createAttachmentFromExisting(
+        fixtureImagePath,
+        "phase1a-cleanup.png",
+        ".png"
+      );
+      const cleanedOcrResult = assertOk(await cleanOcrService.extractAttachmentText(cleanOcrAttachment.id));
+      assert(cleanOcrRegistry.calls === 1, "Image OCR cleanup fixture should call fake OCR registry once.");
+      assert(
+        cleanedOcrResult.extractedText === "函数 f(x) 在区间 上连续\n\nA. 选项一",
+        "Image OCR result should be cleaned before saving."
+      );
+
+      const rawText = "函 数   f ( x ) 在 区 间\r\n上 连 续\r\n\r\n\r\nA.  选 项 一";
+      const rawTxtAttachment = createAttachmentFile(
+        "phase1a-ocr-cleanup-scope.txt",
+        ".txt",
+        Buffer.from(rawText, "utf8")
+      );
+      const rawTxtResult = assertOk(await service.extractAttachmentText(rawTxtAttachment.id));
+      assert(rawTxtResult.sourceType === "text", "TXT cleanup scope fixture should remain text sourceType.");
+      assert(rawTxtResult.extractedText === rawText, "TXT extraction should not apply OCR text cleanup.");
+
       const disabledRegistry = createCountingOcrRegistry();
       const disabledService = createService({
         imageOcrEnabled: false,
