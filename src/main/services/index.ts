@@ -14,6 +14,8 @@ import { AiService } from "../extensions/ai/ai.service";
 import { ExportService } from "../export";
 import type { AiSessionServiceOptions } from "./aiSession.service";
 import { AiSessionService } from "./aiSession.service";
+import type { AiTextCleanupServiceOptions } from "./aiTextCleanup.service";
+import { AiTextCleanupService } from "./aiTextCleanup.service";
 import { AttachmentService } from "./attachment.service";
 import { AttachmentTextExtractionService } from "./attachmentTextExtraction.service";
 import { DatabaseService } from "./database.service";
@@ -27,6 +29,7 @@ import { StorageService } from "./storage.service";
 
 export type CoreServices = {
   aiSessionService: AiSessionService;
+  aiTextCleanupService: AiTextCleanupService;
   aiService: AiService;
   attachmentService: AttachmentService;
   attachmentTextExtractionService: AttachmentTextExtractionService;
@@ -47,6 +50,7 @@ export const createCoreServices = (
   appPath: string,
   options: {
     aiSessionService?: AiSessionServiceOptions;
+    aiTextCleanupService?: AiTextCleanupServiceOptions;
   } = {}
 ): CoreServices => {
   const nodesRepository = new NodesRepository(adapter);
@@ -93,6 +97,11 @@ export const createCoreServices = (
     dataDirectoryInfo,
     options.aiSessionService
   );
+  const aiTextCleanupService = new AiTextCleanupService(
+    attachmentTextCacheRepository,
+    settingsService,
+    options.aiTextCleanupService
+  );
   const ocrRuntimeService = new OcrRuntimeService(appPath);
   const tesseractOcrEngine = new TesseractOcrEngine(ocrRuntimeService, dataDirectoryInfo);
   const rapidOcrEngine = new RapidOcrEngine(ocrRuntimeService, dataDirectoryInfo);
@@ -107,6 +116,7 @@ export const createCoreServices = (
 
   return {
     aiSessionService,
+    aiTextCleanupService,
     aiService,
     attachmentService,
     attachmentTextExtractionService,
@@ -129,6 +139,7 @@ export const createCoreServices = (
 export { AttachmentService } from "./attachment.service";
 export { AttachmentTextExtractionService } from "./attachmentTextExtraction.service";
 export { AiSessionService } from "./aiSession.service";
+export { AiTextCleanupService } from "./aiTextCleanup.service";
 export { AiService } from "../extensions/ai/ai.service";
 export { DatabaseService } from "./database.service";
 export { ExportService } from "../export";

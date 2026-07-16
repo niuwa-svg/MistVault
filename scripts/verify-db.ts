@@ -207,7 +207,9 @@ for (const disallowedColumn of ["ocr_engine", "ocr_engine_version", "ocr_confide
 await verifyOcrRegistryFallback();
 
 const capturedAiRequests: AiProviderRequest[] = [];
+const capturedAiCleanupRequests: AiProviderRequest[] = [];
 let fakeAiShouldFail = false;
+let fakeAiCleanupResponse = "AI cleaned text";
 const fakeAiProvider: AiProviderAdapter = {
   async explain(request: AiProviderRequest): Promise<AiProviderResponse> {
     capturedAiRequests.push(request);
@@ -215,6 +217,12 @@ const fakeAiProvider: AiProviderAdapter = {
       throw new Error("Provider failed with secret-api-key at C:\\Users\\15268\\secret.txt");
     }
     return { content: `Fake AI response ${capturedAiRequests.length}` };
+  }
+};
+const fakeAiCleanupProvider: AiProviderAdapter = {
+  async explain(request: AiProviderRequest): Promise<AiProviderResponse> {
+    capturedAiCleanupRequests.push(request);
+    return { content: fakeAiCleanupResponse };
   }
 };
 
@@ -232,6 +240,15 @@ const services = createCoreServices(
         qwen: fakeAiProvider,
         kimi: fakeAiProvider,
         doubao: fakeAiProvider
+      }
+    },
+    aiTextCleanupService: {
+      providerAdapters: {
+        openai: fakeAiCleanupProvider,
+        deepseek: fakeAiCleanupProvider,
+        qwen: fakeAiCleanupProvider,
+        kimi: fakeAiCleanupProvider,
+        doubao: fakeAiCleanupProvider
       }
     }
   }
@@ -565,6 +582,37 @@ initializedDatabase.adapter.run(
     new Date().toISOString()
   ]
 );
+writeFileSync(join(dataDirectoryInfo.attachmentsPath, "cleanup-stored.txt"), Buffer.from("cleanup"));
+const cleanupTextAttachment = assertOk(
+  services.attachmentService.createMetadata({
+    mistakeId: mistake.id,
+    field: "note",
+    originalName: "cleanup-note.txt",
+    storedName: "cleanup-stored.txt",
+    mimeType: "text/plain",
+    ext: ".txt",
+    relativePath: "attachments/cleanup-stored.txt",
+    size: 7
+  })
+);
+writeFileSync(join(dataDirectoryInfo.attachmentsPath, "not-extracted-stored.txt"), Buffer.from("not extracted"));
+const notExtractedTextAttachment = assertOk(
+  services.attachmentService.createMetadata({
+    mistakeId: mistake.id,
+    field: "note",
+    originalName: "not-extracted.txt",
+    storedName: "not-extracted-stored.txt",
+    mimeType: "text/plain",
+    ext: ".txt",
+    relativePath: "attachments/not-extracted-stored.txt",
+    size: 13
+  })
+);
+assert(
+  assertFail(await services.aiTextCleanupService.cleanupExtractedText(cleanupTextAttachment.id)) ===
+    "AI_CLEANUP_NOT_CONFIGURED",
+  "AI cleanup should return a clear error before AI is enabled/configured."
+);
 const otherMistakeForAttachment = assertOk(
   services.mistakeService.create({
     nodeId: node.id,
@@ -829,6 +877,100 @@ assert(aiSettings.enabled, "AI enabled setting update failed.");
 assert(aiSettings.provider === "openai", "AI provider update failed.");
 assert(aiSettings.apiKeyConfigured, "AI API key configured flag failed.");
 assert(!("apiKey" in aiSettings), "AI public settings must not expose API key.");
+
+assert(
+  assertFail(await services.aiTextCleanupService.cleanupExtractedText(emptyTextAttachment.id)) ===
+    "AI_CLEANUP_EMPTY_TEXT",
+  "AI cleanup should reject empty extracted text."
+);
+assert(
+  assertFail(await services.aiTextCleanupService.cleanupExtractedText(failedTextAttachment.id)) ===
+    "AI_CLEANUP_EMPTY_TEXT",
+  "AI cleanup should reject failed extracted text."
+);
+assert(
+  assertFail(await services.aiTextCleanupService.cleanupExtractedText(notExtractedTextAttachment.id)) ===
+    "AI_CLEANUP_EMPTY_TEXT",
+  "AI cleanup should reject attachments without extracted text."
+);
+
+const cleanupSourceText = [
+  "1. 已知函数 f(x) = x^2，求导数。",
+  "C:\\Users\\15268\\secret\\storedName.png relativePath attachments/question-stored.png",
+  "image_url data:image/png;base64,abc secret-api-key"
+].join("\n");
+assertOk(
+  services.attachmentTextExtractionService.updateExtractedText(cleanupTextAttachment.id, cleanupSourceText)
+);
+fakeAiCleanupResponse = "1. 已知函数 f(x) = x^2，求导数。";
+const beforeCleanupCache = assertOk(
+  services.attachmentTextExtractionService.getExtractedText(cleanupTextAttachment.id)
+);
+const cleanupResult = assertOk(
+  await services.aiTextCleanupService.cleanupExtractedText(cleanupTextAttachment.id)
+);
+assert(cleanupResult.cleanedText === fakeAiCleanupResponse, "AI cleanup should return provider output.");
+assert(!cleanupResult.truncated, "Short AI cleanup input should not be marked truncated.");
+assert(cleanupResult.provider === "openai", "AI cleanup should report the configured provider.");
+const cleanupPromptText = JSON.stringify(capturedAiCleanupRequests.at(-1)?.messages ?? []);
+assert(
+  cleanupPromptText.includes("只做排版整理和明显 OCR 错误的保守修正"),
+  "AI cleanup prompt should include conservative cleanup instructions."
+);
+assert(cleanupPromptText.includes("不要解题"), "AI cleanup prompt should forbid solving.");
+assert(!cleanupPromptText.includes("C:\\Users"), "AI cleanup prompt must not include absolute paths.");
+assert(!cleanupPromptText.includes("storedName"), "AI cleanup prompt must not include storedName.");
+assert(!cleanupPromptText.includes("relativePath"), "AI cleanup prompt must not include relativePath.");
+assert(!cleanupPromptText.includes("attachments/"), "AI cleanup prompt must not include attachment relative paths.");
+assert(!cleanupPromptText.includes("secret-api-key"), "AI cleanup prompt must not include API keys.");
+assert(!cleanupPromptText.includes("image_url"), "AI cleanup prompt must not include image_url.");
+assert(!cleanupPromptText.includes("data:image"), "AI cleanup prompt must not include data image URLs.");
+assert(!cleanupPromptText.includes("base64"), "AI cleanup prompt must not include base64 markers.");
+const afterCleanupCache = assertOk(
+  services.attachmentTextExtractionService.getExtractedText(cleanupTextAttachment.id)
+);
+assert(
+  afterCleanupCache.extractedText === beforeCleanupCache.extractedText,
+  "AI cleanup must not automatically write back to attachment_text_cache."
+);
+const savedCleanupText = assertOk(
+  services.attachmentTextExtractionService.updateExtractedText(
+    cleanupTextAttachment.id,
+    cleanupResult.cleanedText
+  )
+);
+assert(
+  savedCleanupText.extractedText === cleanupResult.cleanedText && savedCleanupText.isEdited,
+  "AI cleanup result should persist only through updateExtractedText as an edited cache."
+);
+
+fakeAiCleanupResponse = "Edited cleanup text";
+const editedCleanup = assertOk(
+  await services.aiTextCleanupService.cleanupExtractedText(cleanupTextAttachment.id)
+);
+assert(
+  editedCleanup.cleanedText === "Edited cleanup text",
+  "AI cleanup should accept manually edited extracted text."
+);
+
+fakeAiCleanupResponse = "Long cleanup text";
+const longCleanup = assertOk(
+  await services.aiTextCleanupService.cleanupExtractedText(longTextAttachment.id)
+);
+assert(longCleanup.truncated, "AI cleanup should mark long input as truncated.");
+const longCleanupPromptText = JSON.stringify(capturedAiCleanupRequests.at(-1)?.messages ?? []);
+assert(
+  !longCleanupPromptText.includes("Pinned long attachment text end"),
+  "AI cleanup prompt should truncate long input before the tail."
+);
+
+const cleanupSession = assertOk(services.aiSessionService.createSession(mistake.id));
+const beforeCleanupMessages = assertOk(services.aiSessionService.getSessionMessages(cleanupSession.id));
+assert(beforeCleanupMessages.length === 0, "New AI cleanup pollution session should start empty.");
+assertOk(await services.aiTextCleanupService.cleanupExtractedText(cleanupTextAttachment.id));
+const afterCleanupMessages = assertOk(services.aiSessionService.getSessionMessages(cleanupSession.id));
+assert(afterCleanupMessages.length === 0, "AI cleanup must not create AI session messages.");
+assertOk(services.aiSessionService.deleteSession(cleanupSession.id));
 
 const capabilities = assertOk(services.aiSessionService.getProviderCapabilities());
 assert(

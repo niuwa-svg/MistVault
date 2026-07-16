@@ -94,6 +94,8 @@ export const mistVaultApi: MistVaultApi = {
         ipcRenderer.invoke(ipcChannels.extensionExtractionExtractAttachmentText, attachmentId),
       getExtractedText: (attachmentId) =>
         ipcRenderer.invoke(ipcChannels.extensionExtractionGetExtractedText, attachmentId),
+      cleanupExtractedText: (attachmentId) =>
+        ipcRenderer.invoke(ipcChannels.extensionExtractionCleanupExtractedText, attachmentId),
       updateExtractedText: (attachmentId, text) =>
         ipcRenderer.invoke(ipcChannels.extensionExtractionUpdateExtractedText, attachmentId, text),
       clearExtractedText: (attachmentId) =>

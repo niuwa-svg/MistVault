@@ -8,6 +8,7 @@ import type {
   AiSendMessageOptions,
   AiSendMessageResult,
   AiSession,
+  AiTextCleanupResult,
   Attachment,
   AttachmentFailure,
   AttachmentField,
@@ -133,6 +134,7 @@ export type MistVaultApi = {
       getStatus: (attachmentId: string) => Promise<ApiResult<AttachmentTextStatusResult>>;
       extractAttachmentText: (attachmentId: string) => Promise<ApiResult<AttachmentTextResult>>;
       getExtractedText: (attachmentId: string) => Promise<ApiResult<AttachmentTextResult>>;
+      cleanupExtractedText: (attachmentId: string) => Promise<ApiResult<AiTextCleanupResult>>;
       updateExtractedText: (
         attachmentId: string,
         text: string
@@ -198,6 +200,7 @@ export const ipcChannels = {
   extensionExtractionGetStatus: "extensions:extraction:getStatus",
   extensionExtractionExtractAttachmentText: "extensions:extraction:extractAttachmentText",
   extensionExtractionGetExtractedText: "extensions:extraction:getExtractedText",
+  extensionExtractionCleanupExtractedText: "extensions:extraction:cleanupExtractedText",
   extensionExtractionUpdateExtractedText: "extensions:extraction:updateExtractedText",
   extensionExtractionClearExtractedText: "extensions:extraction:clearExtractedText",
   extensionReviewGetStatus: "extensions:review:getStatus",
