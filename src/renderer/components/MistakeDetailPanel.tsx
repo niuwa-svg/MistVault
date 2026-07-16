@@ -231,6 +231,7 @@ const extractionErrorMessages: Record<string, string> = {
 const aiCleanupErrorMessages: Record<string, string> = {
   AI_CLEANUP_NOT_CONFIGURED: "AI 尚未启用或配置不完整，请先到设置中完成 AI 配置。",
   AI_CLEANUP_EMPTY_TEXT: "当前附件没有可整理的 OCR / 提取文本。",
+  AI_CLEANUP_TEXT_TOO_LONG: "提取文本过长，暂不支持直接 AI 整理，请先手动删减后再试。",
   AI_CLEANUP_FAILED: "AI 整理失败，请稍后重试。"
 };
 
@@ -710,28 +711,28 @@ const AttachmentTextExtractionPanel = ({
       return;
     }
 
-    setAiCleanupBusy(true);
-    setAiCleanupDraftPending(false);
     setMessage(null);
     setCopyMessage(null);
-    const cleaned = await mistVaultApi.extensions.extraction.cleanupExtractedText(attachmentId);
-    if (!isCurrentAttachment()) {
-      return;
+    setAiCleanupBusy(true);
+    try {
+      const cleaned = await mistVaultApi.extensions.extraction.cleanupExtractedText(attachmentId);
+      if (!isCurrentAttachment()) {
+        return;
+      }
+      if (cleaned.ok) {
+        setDraft(cleaned.data.cleanedText);
+        setExpanded(true);
+        setEditing(true);
+        setAiCleanupDraftPending(true);
+        setMessage("AI 整理结果尚未保存，请人工核对后保存。");
+      } else {
+        setMessage(aiCleanupErrorMessage(cleaned.error.code, cleaned.error.message));
+      }
+    } finally {
+      if (isCurrentAttachment()) {
+        setAiCleanupBusy(false);
+      }
     }
-    if (cleaned.ok) {
-      setDraft(cleaned.data.cleanedText);
-      setExpanded(true);
-      setEditing(true);
-      setAiCleanupDraftPending(true);
-      setMessage(
-        cleaned.data.truncated
-          ? "AI 整理结果尚未保存，请人工核对后保存。原文本较长，本次发送给 AI 的内容已截断。"
-          : "AI 整理结果尚未保存，请人工核对后保存。"
-      );
-    } else {
-      setMessage(aiCleanupErrorMessage(cleaned.error.code, cleaned.error.message));
-    }
-    setAiCleanupBusy(false);
   };
 
   const currentStatus = status?.status ?? "notExtracted";

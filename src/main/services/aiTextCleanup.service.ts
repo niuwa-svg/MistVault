@@ -26,6 +26,7 @@ const maxCleanupInputChars = 12_000;
 const cleanupMessages = {
   AI_CLEANUP_NOT_CONFIGURED: "AI 尚未启用或配置不完整，请先到设置中完成 AI 配置。",
   AI_CLEANUP_EMPTY_TEXT: "当前附件没有可整理的 OCR / 提取文本。",
+  AI_CLEANUP_TEXT_TOO_LONG: "提取文本过长，暂不支持直接 AI 整理，请先手动删减后再试。",
   AI_CLEANUP_FAILED: "AI 整理失败，请稍后重试。"
 } as const;
 
@@ -80,17 +81,6 @@ const sanitizeStoredErrorMessage = (
   return sanitized ? sanitized.slice(0, 1000) : fallback;
 };
 
-const truncateForCleanup = (text: string): { text: string; truncated: boolean } => {
-  if (text.length <= maxCleanupInputChars) {
-    return { text, truncated: false };
-  }
-
-  return {
-    text: text.slice(0, maxCleanupInputChars),
-    truncated: true
-  };
-};
-
 export class AiTextCleanupService {
   private readonly openAiCompatibleProvider = new OpenAiCompatibleProvider();
   private readonly unsupportedProvider = new UnsupportedAiProvider();
@@ -138,12 +128,17 @@ export class AiTextCleanupService {
       return serviceFail("AI_CLEANUP_EMPTY_TEXT", cleanupMessages.AI_CLEANUP_EMPTY_TEXT);
     }
 
-    const input = truncateForCleanup(redactText(cache.extractedText.trim(), [settings.apiKey]));
+    const sourceText = cache.extractedText.trim();
+    if (sourceText.length > maxCleanupInputChars) {
+      return serviceFail("AI_CLEANUP_TEXT_TOO_LONG", cleanupMessages.AI_CLEANUP_TEXT_TOO_LONG);
+    }
+
+    const input = redactText(sourceText, [settings.apiKey]);
     const prompt = [
       conservativeCleanupInstruction,
       "",
       "待整理文本：",
-      input.text
+      input
     ].join("\n");
 
     try {
@@ -168,7 +163,6 @@ export class AiTextCleanupService {
         cleanedText,
         originalLength: cache.extractedText.length,
         cleanedLength: cleanedText.length,
-        truncated: input.truncated,
         provider,
         model: settings.model as string,
         generatedAt: new Date().toISOString()

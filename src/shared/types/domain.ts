@@ -331,7 +331,6 @@ export type AiTextCleanupResult = {
   cleanedText: string;
   originalLength: number;
   cleanedLength: number;
-  truncated: boolean;
   provider: AiProvider;
   model: string;
   generatedAt: string;
