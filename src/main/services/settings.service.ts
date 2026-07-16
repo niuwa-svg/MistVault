@@ -5,6 +5,7 @@ import type {
   BasicSettingsInfo,
   DatabaseSettings,
   DatabaseType,
+  ExtensionStatus,
   ExportFormat,
   Settings,
   ThemeMode,
@@ -118,7 +119,7 @@ export class SettingsService {
         databaseType: database.type,
         database,
         ai,
-        ocrEnabled: this.settingsRepository.getValue("ocrEnabled", false),
+        ocrEnabled: this.settingsRepository.getValue("ocrEnabled", true),
         reviewRecommendationEnabled: this.settingsRepository.getValue(
           "reviewRecommendationEnabled",
           false
@@ -149,6 +150,25 @@ export class SettingsService {
 
       return settings.data;
     }, "SETTINGS_UPDATE_FAILED", "Failed to update settings.");
+  }
+
+  getOcrStatus(): ApiResult<ExtensionStatus> {
+    return captureServiceError(
+      () => {
+        const enabled = this.settingsRepository.getValue("ocrEnabled", true);
+        const status: ExtensionStatus = {
+          name: "ocr",
+          enabled,
+          status: enabled ? "ready" : "disabled",
+          message: enabled
+            ? "图片 OCR 已启用，本地离线运行。"
+            : "图片 OCR 已在设置中关闭。"
+        };
+        return status;
+      },
+      "OCR_STATUS_FAILED",
+      "Failed to read OCR extension status."
+    );
   }
 
   getAiSettings(): ApiResult<AiSettings> {

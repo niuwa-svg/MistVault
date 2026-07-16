@@ -25,6 +25,7 @@ export const registerIpcHandlers = (
     services?.aiService ?? null,
     services?.aiSessionService ?? null,
     services?.reviewService ?? null,
-    services?.attachmentTextExtractionService ?? null
+    services?.attachmentTextExtractionService ?? null,
+    services?.settingsService ?? null
   );
 };

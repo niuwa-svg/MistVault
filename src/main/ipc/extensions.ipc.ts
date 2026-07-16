@@ -2,13 +2,13 @@ import { ipcMain } from "electron";
 import { apiFail, apiOk, ipcChannels } from "@shared/types";
 import type { AiExplainMistakeOptions, AiSendMessageOptions, AttachmentTextScope } from "@shared/types";
 import { getNoopAiStatus } from "../extensions/ai/noopAiProvider";
-import { getNoopOcrStatus } from "../extensions/ocr/noopOcrProvider";
 import { getNoopReviewStatus } from "../extensions/review/noopReviewScheduler";
 import type {
   AiService,
   AiSessionService,
   AttachmentTextExtractionService,
-  ReviewService
+  ReviewService,
+  SettingsService
 } from "../services";
 
 const reviewUnavailable = () =>
@@ -63,7 +63,8 @@ export const registerExtensionsIpc = (
   aiService: AiService | null = null,
   aiSessionService: AiSessionService | null = null,
   reviewService: ReviewService | null = null,
-  attachmentTextExtractionService: AttachmentTextExtractionService | null = null
+  attachmentTextExtractionService: AttachmentTextExtractionService | null = null,
+  settingsService: SettingsService | null = null
 ): void => {
   ipcMain.handle(ipcChannels.extensionAiGetStatus, async () => {
     try {
@@ -153,7 +154,14 @@ export const registerExtensionsIpc = (
 
   ipcMain.handle(ipcChannels.extensionOcrGetStatus, async () => {
     try {
-      return apiOk(getNoopOcrStatus());
+      return settingsService
+        ? settingsService.getOcrStatus()
+        : apiOk({
+            name: "ocr",
+            enabled: false,
+            status: "disabled",
+            message: "图片 OCR 暂不可用，设置服务尚未就绪。"
+          });
     } catch (error) {
       return apiFail("OCR_STATUS_FAILED", "Failed to read OCR extension status.", error);
     }

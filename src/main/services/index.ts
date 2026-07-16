@@ -101,7 +101,8 @@ export const createCoreServices = (
     attachmentsRepository,
     attachmentTextCacheRepository,
     dataDirectoryInfo,
-    ocrEngineRegistry
+    ocrEngineRegistry,
+    () => settingsRepository.getValue("ocrEnabled", true)
   );
 
   return {
