@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { initializeDatabase } from "../src/main/db";
 import { listAppliedMigrations, runMigrations } from "../src/main/db/migrations";
 import type { AiProviderAdapter, AiProviderRequest, AiProviderResponse } from "../src/main/extensions/ai/aiProvider";
+import { AiProviderFailure } from "../src/main/extensions/ai/aiProvider";
 import { OcrEngineRegistry } from "../src/main/services/ocr";
 import type { OcrEngine, OcrEngineName, OcrEngineResult } from "../src/main/services/ocr";
 import { sanitizeOcrProcessMessage } from "../src/main/services/ocr/safeOcrError";
@@ -224,7 +225,7 @@ const fakeAiCleanupProvider: AiProviderAdapter = {
   async explain(request: AiProviderRequest): Promise<AiProviderResponse> {
     capturedAiCleanupRequests.push(request);
     if (fakeAiCleanupShouldFail) {
-      throw new Error("Cleanup provider failed with secret-api-key at C:\\Users\\15268\\cleanup.txt");
+      throw new AiProviderFailure("AI_NETWORK_ERROR", "Cleanup provider failed with secret-api-key at C:\\Users\\15268\\cleanup.txt");
     }
     return { content: fakeAiCleanupResponse };
   }
@@ -990,10 +991,14 @@ fakeAiCleanupShouldFail = true;
 const beforeFailedCleanupCache = assertOk(
   services.attachmentTextExtractionService.getExtractedText(cleanupTextAttachment.id)
 );
+const failedCleanup = await services.aiTextCleanupService.cleanupExtractedText(cleanupTextAttachment.id);
 assert(
-  assertFail(await services.aiTextCleanupService.cleanupExtractedText(cleanupTextAttachment.id)) ===
-    "AI_CLEANUP_FAILED",
+  assertFail(failedCleanup) === "AI_CLEANUP_FAILED",
   "AI cleanup provider failure should return a safe error."
+);
+assert(
+  !failedCleanup.ok && failedCleanup.error.message === "AI 网络请求失败，请检查网络或 provider 地址。",
+  "AI cleanup provider failure should return a specific safe user-facing message."
 );
 const afterFailedCleanupCache = assertOk(
   services.attachmentTextExtractionService.getExtractedText(cleanupTextAttachment.id)

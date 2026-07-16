@@ -30,6 +30,16 @@ const cleanupMessages = {
   AI_CLEANUP_FAILED: "AI 整理失败，请稍后重试。"
 } as const;
 
+const providerFailureMessages: Record<AiProviderFailure["code"], string> = {
+  AI_PROVIDER_UNSUPPORTED: "当前 AI provider 暂不支持文本整理，请更换已支持的 provider。",
+  AI_NETWORK_ERROR: "AI 网络请求失败，请检查网络或 provider 地址。",
+  AI_AUTH_ERROR: "AI 鉴权失败，请检查 API Key。",
+  AI_RATE_LIMITED: "AI 请求被限流或余额不足，请稍后再试或检查 provider 账户。",
+  AI_PROVIDER_ERROR: "AI provider 返回异常，请稍后再试。",
+  AI_TIMEOUT: "AI 请求超时，请稍后重试。",
+  AI_UNKNOWN_ERROR: "AI 整理失败，请稍后重试。"
+};
+
 const conservativeCleanupInstruction = [
   "你正在整理 OCR 提取的错题文本。",
   "只做排版整理和明显 OCR 错误的保守修正。",
@@ -169,7 +179,7 @@ export class AiTextCleanupService {
       });
     } catch (error) {
       if (error instanceof AiProviderFailure) {
-        return serviceFail("AI_CLEANUP_FAILED", cleanupMessages.AI_CLEANUP_FAILED);
+        return serviceFail("AI_CLEANUP_FAILED", providerFailureMessages[error.code]);
       }
 
       return serviceFail(

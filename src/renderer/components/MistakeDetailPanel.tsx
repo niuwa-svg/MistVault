@@ -264,7 +264,10 @@ const redactSensitiveText = (value: string): string =>
     .replace(/\b(storedName|relativePath)\b/gi, "<redacted>");
 
 const aiCleanupErrorMessage = (code?: string | null, fallback?: string | null): string =>
-  (code ? aiCleanupErrorMessages[code] : null) ?? redactSensitiveText(fallback || "AI 整理失败，请稍后重试。");
+  code === "AI_CLEANUP_FAILED" && fallback
+    ? redactSensitiveText(fallback)
+    : (code ? aiCleanupErrorMessages[code] : null) ??
+      redactSensitiveText(fallback || "AI 整理失败，请稍后重试。");
 
 const aiErrorMessage = (code?: string | null, fallback?: string | null): string => {
   if (code && aiSessionErrorMessages[code]) {
