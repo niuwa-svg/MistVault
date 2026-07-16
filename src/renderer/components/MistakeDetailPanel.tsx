@@ -703,7 +703,7 @@ const AttachmentTextExtractionPanel = ({
       </div>
       {isOcr ? (
         <p className="attachment-extraction-hint">
-          OCR 适合清晰截图和印刷体文本。数学公式、手写字、低清图片可能识别不准，请核对后再用于 AI 讲解。
+          OCR 适合清晰截图和印刷体文本。已对 OCR 结果进行基础排版整理，数学公式、手写字、低清图片仍可能识别不准，请核对后再用于 AI 讲解。
         </p>
       ) : null}
       <div className="attachment-extraction-actions">

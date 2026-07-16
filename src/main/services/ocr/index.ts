@@ -1,3 +1,4 @@
+export { cleanupOcrText } from "./ocrTextCleanup";
 export { OcrEngineRegistry } from "./ocrEngineRegistry";
 export { RapidOcrEngine } from "./rapidOcrEngine";
 export { TesseractOcrEngine } from "./tesseractOcrEngine";
