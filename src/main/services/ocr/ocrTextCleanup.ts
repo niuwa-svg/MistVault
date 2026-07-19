@@ -2,10 +2,12 @@ const cjkChar = "\u3400-\u9fff\uf900-\ufaff";
 const cjkPunctuation = "，。！？；：、";
 const closingPunctuation = "）】》〉」』";
 const openingPunctuation = "（【《〈「『";
-const optionLinePattern = /^(?:[A-D][.．、]|[（(][A-D][）)]|[①②③④⑤⑥⑦⑧⑨⑩])(?:\s|$)/;
-const numberedLinePattern = /^(?:\d{1,3}|[一二三四五六七八九十]{1,4})[.．、](?:\s|$)/;
-const protectedLinePrefixPattern = /^((?:[A-D][.．、]|[（(][A-D][）)]|[①②③④⑤⑥⑦⑧⑨⑩]|(?:\d{1,3}|[一二三四五六七八九十]{1,4})[.．、]))\s*/;
+const optionLinePattern = /^(?:[A-F][.．、)]|[（(][A-F][）)]|[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳])(?:\s|$)/;
+const numberedLinePattern = /^(?:\d{1,3}|[一二三四五六七八九十]{1,4})[.．、)](?:\s|$)/;
+const subQuestionLinePattern = /^(?:[（(]\s*(?:\d{1,3}|[一二三四五六七八九十]{1,4})\s*[）)]|[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳])(?:\s|$)/;
+const protectedLinePrefixPattern = /^((?:[A-F][.．、)]|[（(][A-F][）)]|[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]|(?:\d{1,3}|[一二三四五六七八九十]{1,4})[.．、)]|[（(]\s*(?:\d{1,3}|[一二三四五六七八九十]{1,4})\s*[）)]))\s*/;
 const sentenceEndPattern = /[。！？!?；;：:）)]$/;
+const formulaTokenPattern = /[=+×÷≤≥≠≈∫∑√^_]|[A-Za-z0-9)]\s*[-*/]\s*[A-Za-z0-9(]|[A-Za-z]\s*\([^)]{0,40}\)|(?:\d\s*[A-Za-z]|[A-Za-z]\s*\d)/;
 
 const normalizeMathSpacing = (line: string): string =>
   line
@@ -43,9 +45,31 @@ const normalizeLine = (line: string): string => {
 };
 
 const isProtectedLine = (line: string): boolean =>
-  optionLinePattern.test(line) || numberedLinePattern.test(line);
+  optionLinePattern.test(line) || numberedLinePattern.test(line) || subQuestionLinePattern.test(line);
 
 const hasCjk = (line: string): boolean => new RegExp(`[${cjkChar}]`).test(line);
+
+const cjkCount = (line: string): number => {
+  const matches = line.match(new RegExp(`[${cjkChar}]`, "g"));
+  return matches?.length ?? 0;
+};
+
+const isCjkDominant = (line: string): boolean => {
+  const visibleLength = line.replace(/\s/g, "").length;
+  return visibleLength > 0 && cjkCount(line) / visibleLength >= 0.45;
+};
+
+const isFormulaLikeLine = (line: string): boolean => formulaTokenPattern.test(line);
+
+const isColumnLikeLine = (line: string): boolean => {
+  const compactLength = line.replace(/\s/g, "").length;
+  if (compactLength === 0 || compactLength > 16) {
+    return false;
+  }
+  return /[\t ]/.test(line) || /\d/.test(line) || /^[A-Za-z]{1,4}$/.test(line);
+};
+
+const isShortCjkLine = (line: string): boolean => line.replace(/\s/g, "").length <= 12 && isCjkDominant(line);
 
 const shouldMergeLine = (previous: string, current: string): boolean => {
   if (!previous || !current) {
@@ -54,13 +78,29 @@ const shouldMergeLine = (previous: string, current: string): boolean => {
   if (isProtectedLine(previous) || isProtectedLine(current)) {
     return false;
   }
+  if (isFormulaLikeLine(previous) || isFormulaLikeLine(current)) {
+    return false;
+  }
+  if (
+    (isColumnLikeLine(previous) && isColumnLikeLine(current)) ||
+    (isShortCjkLine(previous) && isColumnLikeLine(current)) ||
+    (isColumnLikeLine(previous) && isShortCjkLine(current))
+  ) {
+    return false;
+  }
   if (sentenceEndPattern.test(previous)) {
     return false;
   }
-  if (!hasCjk(previous) || !hasCjk(current)) {
+  if (new RegExp(`^[${cjkPunctuation}${closingPunctuation}]`).test(current)) {
+    return true;
+  }
+  if (new RegExp(`[${openingPunctuation}]$`).test(previous)) {
+    return true;
+  }
+  if (isCjkDominant(previous) && isCjkDominant(current)) {
     return false;
   }
-  return true;
+  return hasCjk(previous) && hasCjk(current);
 };
 
 const joinLines = (previous: string, current: string): string => {

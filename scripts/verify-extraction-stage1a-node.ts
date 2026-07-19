@@ -380,7 +380,7 @@ const assertOcrTextCleanup = (): void => {
   const cleaned = cleanupOcrText(dirty);
   const lines = cleaned.split("\n");
 
-  assert(cleaned.includes("函数 f(x) 在区间 上连续，求 x^2 与 x_1"), "OCR cleanup should normalize Chinese and math spacing.");
+  assert(cleaned.includes("函数 f(x) 在区间\n上连续，求 x^2 与 x_1"), "OCR cleanup should normalize spacing while preserving CJK line breaks.");
   assert(!cleaned.includes("\n\n\n"), "OCR cleanup should fold 3+ blank lines.");
   assert(lines.some((line) => line.startsWith("A. 选项甲 x_{1}^{2}")), "OCR cleanup should keep A option on its own line.");
   assert(lines.some((line) => line.startsWith("B、 选项乙")), "OCR cleanup should keep B option on its own line.");
@@ -392,6 +392,38 @@ const assertOcrTextCleanup = (): void => {
     assert(cleaned.includes(symbol), `OCR cleanup should preserve math symbol ${symbol}.`);
   }
   assert(cleaned.includes("x_{1}^{2}"), "OCR cleanup should not break LaTeX-like text.");
+
+  const cjkStem = cleanupOcrText(
+    [
+      "下列关于进程调度的说法中",
+      "正确的是",
+      "进程调度程序负责选择下一个运行的进程"
+    ].join("\n")
+  );
+  assert(cjkStem.split("\n").length === 3, "OCR cleanup should preserve CJK multi-line question stems.");
+
+  const choiceQuestion = cleanupOcrText(
+    [
+      "1. 下列说法正确的是",
+      "A. 选项一",
+      "B. 选项二",
+      "C. 选项三",
+      "D. 选项四"
+    ].join("\n")
+  );
+  const choiceLines = choiceQuestion.split("\n");
+  assert(choiceLines.filter((line) => /^\d+[.．、]\s/.test(line)).length === 1, "OCR cleanup should keep one numbered question line.");
+  assert(choiceLines.filter((line) => /^[A-D][.．、]\s/.test(line)).length === 4, "OCR cleanup should keep A-D options as separate lines.");
+  assert(!choiceQuestion.includes("A. 选项一 B. 选项二"), "OCR cleanup should not merge adjacent option lines.");
+
+  const formulaMix = cleanupOcrText(["设函数", "f(x) = x2e-x", "则下列结论正确的是"].join("\n"));
+  assert(formulaMix === "设函数\nf(x) = x2e-x\n则下列结论正确的是", "OCR cleanup should preserve formula lines without rewriting formula text.");
+
+  const subQuestions = cleanupOcrText(["（1）求函数的定义域", "（2）讨论函数的单调性"].join("\n"));
+  assert(subQuestions === "（1） 求函数的定义域\n（2） 讨论函数的单调性", "OCR cleanup should keep subquestion numbers on separate lines.");
+
+  const tableLike = cleanupOcrText(["项目 数值", "甲 90", "乙 88"].join("\n"));
+  assert(tableLike.split("\n").length === 3, "OCR cleanup should preserve short column-like OCR rows.");
 };
 
 const sleep = (ms: number): void => {
@@ -520,7 +552,7 @@ export default async function verifyExtractionStage1A(): Promise<void> {
       const cleanedOcrResult = assertOk(await cleanOcrService.extractAttachmentText(cleanOcrAttachment.id));
       assert(cleanOcrRegistry.calls === 1, "Image OCR cleanup fixture should call fake OCR registry once.");
       assert(
-        cleanedOcrResult.extractedText === "函数 f(x) 在区间 上连续\n\nA. 选项一",
+        cleanedOcrResult.extractedText === "函数 f(x) 在区间\n上连续\n\nA. 选项一",
         "Image OCR result should be cleaned before saving."
       );
 
