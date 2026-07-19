@@ -146,6 +146,23 @@ Cleanup structure fix rerun on 2026-07-19:
 - Dense option pages still have isolated OCR/cleanup ambiguities outside the CJK collapse fix:
   the matrix page option count was 37 -> 36 and English page 2 was 12 -> 11.
 
+Dense option boundary fix rerun on 2026-07-19:
+
+- The same local public sample set was rerun after protecting parenthesized A-F/a-f option-like
+  markers from math function-call spacing cleanup.
+- Root cause: `normalizeMathSpacing` treated text such as `p.a (B)` and `from (a)` as function-call
+  spacing and collapsed it to `p.a(B)` / `from(a)`, removing the whitespace boundary used by option
+  counting and manual reading.
+- The matrix page option count is now 37 -> 37. Manual spot check confirmed the restored `(B)` is a
+  real inline answer option in `p.a (B) 2.5 % p.a.`.
+- English page 2 option-like count is now 12 -> 12. Manual spot check confirmed the restored
+  `(a)-(c)` is a prose reference to choices rather than an answer line; cleanup still should not
+  swallow that boundary.
+- The controlled Chinese shadow page stayed 36 -> 36 lines, the Chinese PDF-rendered page stayed
+  36 -> 36 lines, and the Chinese math page stayed 62 -> 57 lines.
+- Remaining limitation: the benchmark option count is still a marker-count heuristic, not semantic
+  classification of actual answer options.
+
 ## 10. AI Formatting
 
 AI formatting was not run. It remains a manual post-processing step and should not be treated as OCR accuracy. Based on current implementation boundaries, AI formatting may improve paragraph readability and option grouping, but it must not be relied on to correct formulas, infer missing symbols, or replace manual review.
