@@ -8,7 +8,7 @@ This helper wraps RapidOCR as a local JSON-only executable for Electron main.
 rapidocr-helper.exe --image C:\absolute\input.png --json
 ```
 
-stdout contains exactly one JSON object. stderr is suppressed during RapidOCR import, initialization, and recognition.
+stdout contains exactly one ASCII-safe JSON object. Non-ASCII OCR text is emitted with JSON Unicode escapes and is restored by `JSON.parse`. stderr is suppressed during RapidOCR import, initialization, and recognition.
 
 ## Build
 

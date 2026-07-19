@@ -10,6 +10,7 @@ release/
 .env
 .DS_Store
 Thumbs.db
+.tmp/
 
 # RapidOCR local runtime artifacts
 /resources/ocr/rapidocr/rapidocr-helper.exe
