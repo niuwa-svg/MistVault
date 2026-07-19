@@ -132,6 +132,20 @@ Side effects:
   RapidOCR 37 to 36 on the matrix page and 12 to 11 on an English page.
 - Cleanup cannot reconstruct superscripts, fractions, matrices, integrals, or table geometry once OCR flattened them.
 
+Cleanup structure fix rerun on 2026-07-19:
+
+- The same local public sample set was rerun after adding conservative CJK line-break protection.
+- Registry/RapidOCR succeeded on 12/12 samples. Cleanup still changed whitespace or simple spacing on
+  11/12 registry outputs, so the basic readability cleanup remains active.
+- The controlled Chinese shadow page stayed at 36 -> 36 lines after cleanup, with question numbers
+  1 -> 1 and option labels 0 -> 0.
+- The Chinese PDF-rendered page stayed at 36 -> 36 lines after cleanup, with question numbers
+  1 -> 1 and option labels 0 -> 0.
+- The Chinese math page changed from 62 -> 57 lines after cleanup, with question numbers 3 -> 3 and
+  option labels 0 -> 0. This no longer shows the earlier 62 -> 28 structure collapse.
+- Dense option pages still have isolated OCR/cleanup ambiguities outside the CJK collapse fix:
+  the matrix page option count was 37 -> 36 and English page 2 was 12 -> 11.
+
 ## 10. AI Formatting
 
 AI formatting was not run. It remains a manual post-processing step and should not be treated as OCR accuracy. Based on current implementation boundaries, AI formatting may improve paragraph readability and option grouping, but it must not be relied on to correct formulas, infer missing symbols, or replace manual review.
