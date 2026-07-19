@@ -24,6 +24,7 @@ export const registerIpcHandlers = (
   registerExtensionsIpc(
     services?.aiService ?? null,
     services?.aiSessionService ?? null,
+    services?.aiTextCleanupService ?? null,
     services?.reviewService ?? null,
     services?.attachmentTextExtractionService ?? null,
     services?.settingsService ?? null

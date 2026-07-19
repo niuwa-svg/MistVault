@@ -326,6 +326,16 @@ export type AiExplanationResult = {
   generatedAt: string;
 };
 
+export type AiTextCleanupResult = {
+  attachmentId: EntityId;
+  cleanedText: string;
+  originalLength: number;
+  cleanedLength: number;
+  provider: AiProvider;
+  model: string;
+  generatedAt: string;
+};
+
 export type AiSessionStatus = "active" | "deleted";
 
 export type AiMessageRole = "user" | "assistant" | "system";

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { initializeDatabase } from "../src/main/db";
 import { listAppliedMigrations, runMigrations } from "../src/main/db/migrations";
 import type { AiProviderAdapter, AiProviderRequest, AiProviderResponse } from "../src/main/extensions/ai/aiProvider";
+import { AiProviderFailure } from "../src/main/extensions/ai/aiProvider";
 import { OcrEngineRegistry } from "../src/main/services/ocr";
 import type { OcrEngine, OcrEngineName, OcrEngineResult } from "../src/main/services/ocr";
 import { sanitizeOcrProcessMessage } from "../src/main/services/ocr/safeOcrError";
@@ -207,7 +208,10 @@ for (const disallowedColumn of ["ocr_engine", "ocr_engine_version", "ocr_confide
 await verifyOcrRegistryFallback();
 
 const capturedAiRequests: AiProviderRequest[] = [];
+const capturedAiCleanupRequests: AiProviderRequest[] = [];
 let fakeAiShouldFail = false;
+let fakeAiCleanupFailureCode: AiProviderFailure["code"] | null = null;
+let fakeAiCleanupResponse = "AI cleaned text";
 const fakeAiProvider: AiProviderAdapter = {
   async explain(request: AiProviderRequest): Promise<AiProviderResponse> {
     capturedAiRequests.push(request);
@@ -215,6 +219,15 @@ const fakeAiProvider: AiProviderAdapter = {
       throw new Error("Provider failed with secret-api-key at C:\\Users\\15268\\secret.txt");
     }
     return { content: `Fake AI response ${capturedAiRequests.length}` };
+  }
+};
+const fakeAiCleanupProvider: AiProviderAdapter = {
+  async explain(request: AiProviderRequest): Promise<AiProviderResponse> {
+    capturedAiCleanupRequests.push(request);
+    if (fakeAiCleanupFailureCode) {
+      throw new AiProviderFailure(fakeAiCleanupFailureCode, "Cleanup provider failed with secret-api-key at C:\\Users\\15268\\cleanup.txt");
+    }
+    return { content: fakeAiCleanupResponse };
   }
 };
 
@@ -232,6 +245,15 @@ const services = createCoreServices(
         qwen: fakeAiProvider,
         kimi: fakeAiProvider,
         doubao: fakeAiProvider
+      }
+    },
+    aiTextCleanupService: {
+      providerAdapters: {
+        openai: fakeAiCleanupProvider,
+        deepseek: fakeAiCleanupProvider,
+        qwen: fakeAiCleanupProvider,
+        kimi: fakeAiCleanupProvider,
+        doubao: fakeAiCleanupProvider
       }
     }
   }
@@ -565,6 +587,37 @@ initializedDatabase.adapter.run(
     new Date().toISOString()
   ]
 );
+writeFileSync(join(dataDirectoryInfo.attachmentsPath, "cleanup-stored.txt"), Buffer.from("cleanup"));
+const cleanupTextAttachment = assertOk(
+  services.attachmentService.createMetadata({
+    mistakeId: mistake.id,
+    field: "note",
+    originalName: "cleanup-note.txt",
+    storedName: "cleanup-stored.txt",
+    mimeType: "text/plain",
+    ext: ".txt",
+    relativePath: "attachments/cleanup-stored.txt",
+    size: 7
+  })
+);
+writeFileSync(join(dataDirectoryInfo.attachmentsPath, "not-extracted-stored.txt"), Buffer.from("not extracted"));
+const notExtractedTextAttachment = assertOk(
+  services.attachmentService.createMetadata({
+    mistakeId: mistake.id,
+    field: "note",
+    originalName: "not-extracted.txt",
+    storedName: "not-extracted-stored.txt",
+    mimeType: "text/plain",
+    ext: ".txt",
+    relativePath: "attachments/not-extracted-stored.txt",
+    size: 13
+  })
+);
+assert(
+  assertFail(await services.aiTextCleanupService.cleanupExtractedText(cleanupTextAttachment.id)) ===
+    "AI_CLEANUP_NOT_CONFIGURED",
+  "AI cleanup should return a clear error before AI is enabled/configured."
+);
 const otherMistakeForAttachment = assertOk(
   services.mistakeService.create({
     nodeId: node.id,
@@ -829,6 +882,259 @@ assert(aiSettings.enabled, "AI enabled setting update failed.");
 assert(aiSettings.provider === "openai", "AI provider update failed.");
 assert(aiSettings.apiKeyConfigured, "AI API key configured flag failed.");
 assert(!("apiKey" in aiSettings), "AI public settings must not expose API key.");
+
+assert(
+  assertFail(await services.aiTextCleanupService.cleanupExtractedText(emptyTextAttachment.id)) ===
+    "AI_CLEANUP_EMPTY_TEXT",
+  "AI cleanup should reject empty extracted text."
+);
+assert(
+  assertFail(await services.aiTextCleanupService.cleanupExtractedText(failedTextAttachment.id)) ===
+    "AI_CLEANUP_EMPTY_TEXT",
+  "AI cleanup should reject failed extracted text."
+);
+assert(
+  assertFail(await services.aiTextCleanupService.cleanupExtractedText(notExtractedTextAttachment.id)) ===
+    "AI_CLEANUP_EMPTY_TEXT",
+  "AI cleanup should reject attachments without extracted text."
+);
+
+const cleanupSourceText = [
+  "1.下列说法正确的是 A.选项一 B.选项二 C.选项三 D.选项四",
+  "f(x) = x2e-x",
+  "C:\\Users\\15268\\secret\\storedName.png relativePath attachments/question-stored.png",
+  "image_url data:image/png;base64,abc secret-api-key"
+].join("\n");
+assertOk(
+  services.attachmentTextExtractionService.updateExtractedText(cleanupTextAttachment.id, cleanupSourceText)
+);
+fakeAiCleanupResponse = [
+  "1. 下列说法正确的是",
+  "",
+  "A. 选项一",
+  "B. 选项二",
+  "C. 选项三",
+  "D. 选项四",
+  "f(x) = x2e-x"
+].join("\n");
+const beforeCleanupCache = assertOk(
+  services.attachmentTextExtractionService.getExtractedText(cleanupTextAttachment.id)
+);
+const cleanupResult = assertOk(
+  await services.aiTextCleanupService.cleanupExtractedText(cleanupTextAttachment.id)
+);
+assert(cleanupResult.cleanedText === fakeAiCleanupResponse, "AI cleanup should return provider output.");
+assert(cleanupResult.provider === "openai", "AI cleanup should report the configured provider.");
+assert(
+  capturedAiCleanupRequests.at(-1)?.config.timeoutMs === 180_000,
+  "AI cleanup should use a longer timeout for OCR text cleanup."
+);
+const cleanupPromptText = JSON.stringify(capturedAiCleanupRequests.at(-1)?.messages ?? []);
+assert(
+  cleanupPromptText.includes("你只能调整换行、连续空格、连续空行、题号和选项的排列"),
+  "AI cleanup prompt should restrict cleanup to formatting."
+);
+assert(
+  cleanupPromptText.includes("公式内容宁可保留 OCR 错误，也不能猜测修正"),
+  "AI cleanup prompt should forbid formula guessing."
+);
+assert(
+  cleanupPromptText.includes("不要转换为 Markdown 或 LaTeX"),
+  "AI cleanup prompt should forbid Markdown and LaTeX conversion."
+);
+assert(cleanupPromptText.includes("不要解题"), "AI cleanup prompt should forbid solving.");
+assert(
+  !cleanupPromptText.includes("明显 OCR 错误的保守修正"),
+  "AI cleanup prompt must not ask the provider to fix OCR content."
+);
+assert(
+  !cleanupPromptText.includes("[?]"),
+  "AI cleanup prompt must not ask the provider to replace uncertain formulas."
+);
+assert(!cleanupPromptText.includes("C:\\Users"), "AI cleanup prompt must not include absolute paths.");
+assert(!cleanupPromptText.includes("storedName"), "AI cleanup prompt must not include storedName.");
+assert(!cleanupPromptText.includes("relativePath"), "AI cleanup prompt must not include relativePath.");
+assert(!cleanupPromptText.includes("attachments/"), "AI cleanup prompt must not include attachment relative paths.");
+assert(!cleanupPromptText.includes("secret-api-key"), "AI cleanup prompt must not include API keys.");
+assert(!cleanupPromptText.includes("image_url"), "AI cleanup prompt must not include image_url.");
+assert(!cleanupPromptText.includes("data:image"), "AI cleanup prompt must not include data image URLs.");
+assert(!cleanupPromptText.includes("base64"), "AI cleanup prompt must not include base64 markers.");
+const afterCleanupCache = assertOk(
+  services.attachmentTextExtractionService.getExtractedText(cleanupTextAttachment.id)
+);
+assert(
+  afterCleanupCache.extractedText === beforeCleanupCache.extractedText,
+  "AI cleanup must not automatically write back to attachment_text_cache."
+);
+assert(
+  cleanupResult.cleanedText.includes("A. 选项一") &&
+    cleanupResult.cleanedText.includes("D. 选项四"),
+  "AI cleanup should allow option formatting."
+);
+assert(
+  cleanupResult.cleanedText.includes("f(x) = x2e-x"),
+  "AI cleanup should preserve formula-like OCR text exactly."
+);
+const savedCleanupText = assertOk(
+  services.attachmentTextExtractionService.updateExtractedText(
+    cleanupTextAttachment.id,
+    cleanupResult.cleanedText
+  )
+);
+assert(
+  savedCleanupText.extractedText === cleanupResult.cleanedText && savedCleanupText.isEdited,
+  "AI cleanup result should persist only through updateExtractedText as an edited cache."
+);
+
+fakeAiCleanupResponse = "Edited cleanup text";
+const editedCleanup = assertOk(
+  await services.aiTextCleanupService.cleanupExtractedText(cleanupTextAttachment.id)
+);
+assert(
+  editedCleanup.cleanedText === "Edited cleanup text",
+  "AI cleanup should accept manually edited extracted text."
+);
+
+assertOk(
+  services.attachmentTextExtractionService.updateExtractedText(cleanupTextAttachment.id, "f(x) = x2e-x")
+);
+fakeAiCleanupResponse = "$f(x)=x^2e^{-x}$";
+const beforeLatexRewriteCache = assertOk(
+  services.attachmentTextExtractionService.getExtractedText(cleanupTextAttachment.id)
+);
+const latexRewriteCleanup = await services.aiTextCleanupService.cleanupExtractedText(cleanupTextAttachment.id);
+assert(
+  assertFail(latexRewriteCleanup) === "AI_CLEANUP_FORMULA_REWRITE",
+  "AI cleanup should reject newly added LaTeX or Markdown formula markers."
+);
+assert(
+  !latexRewriteCleanup.ok &&
+    latexRewriteCleanup.error.message === "AI 返回了疑似公式改写结果，已保留原文本，请手动整理。",
+  "AI cleanup formula rewrite rejection should return a clear user-facing message."
+);
+const afterLatexRewriteCache = assertOk(
+  services.attachmentTextExtractionService.getExtractedText(cleanupTextAttachment.id)
+);
+assert(
+  afterLatexRewriteCache.extractedText === beforeLatexRewriteCache.extractedText,
+  "Rejected AI cleanup markup must not modify attachment_text_cache."
+);
+fakeAiCleanupResponse = "f(x)=x²e⁻ˣ";
+const unicodeSuperscriptCleanup = await services.aiTextCleanupService.cleanupExtractedText(
+  cleanupTextAttachment.id
+);
+assert(
+  assertFail(unicodeSuperscriptCleanup) === "AI_CLEANUP_FORMULA_REWRITE",
+  "AI cleanup should reject newly added Unicode superscript formula markers."
+);
+const afterUnicodeSuperscriptCache = assertOk(
+  services.attachmentTextExtractionService.getExtractedText(cleanupTextAttachment.id)
+);
+assert(
+  afterUnicodeSuperscriptCache.extractedText === beforeLatexRewriteCache.extractedText,
+  "Rejected AI cleanup Unicode superscripts must not modify attachment_text_cache."
+);
+assertOk(
+  services.attachmentTextExtractionService.updateExtractedText(cleanupTextAttachment.id, "普通 OCR 文本")
+);
+fakeAiCleanupResponse = "```text\n普通 OCR 文本\n```";
+const beforeCodeFenceCache = assertOk(
+  services.attachmentTextExtractionService.getExtractedText(cleanupTextAttachment.id)
+);
+assert(
+  assertFail(await services.aiTextCleanupService.cleanupExtractedText(cleanupTextAttachment.id)) ===
+    "AI_CLEANUP_FORMULA_REWRITE",
+  "AI cleanup should reject Markdown code fences in provider output."
+);
+const afterCodeFenceCache = assertOk(
+  services.attachmentTextExtractionService.getExtractedText(cleanupTextAttachment.id)
+);
+assert(
+  afterCodeFenceCache.extractedText === beforeCodeFenceCache.extractedText,
+  "Rejected AI cleanup code fences must not modify attachment_text_cache."
+);
+fakeAiCleanupResponse = "Edited cleanup text";
+
+fakeAiCleanupResponse = "Long cleanup text";
+const beforeLongCleanupRequestCount = capturedAiCleanupRequests.length;
+const beforeLongCleanupCache = assertOk(
+  services.attachmentTextExtractionService.getExtractedText(longTextAttachment.id)
+);
+assert(
+  assertFail(await services.aiTextCleanupService.cleanupExtractedText(longTextAttachment.id)) ===
+    "AI_CLEANUP_TEXT_TOO_LONG",
+  "AI cleanup should reject long text instead of returning a partial cleanup."
+);
+assert(
+  capturedAiCleanupRequests.length === beforeLongCleanupRequestCount,
+  "AI cleanup should not call the provider for overlong text."
+);
+const afterLongCleanupCache = assertOk(
+  services.attachmentTextExtractionService.getExtractedText(longTextAttachment.id)
+);
+assert(
+  afterLongCleanupCache.extractedText === beforeLongCleanupCache.extractedText,
+  "Long AI cleanup rejection must not modify attachment_text_cache."
+);
+
+const cleanupSession = assertOk(services.aiSessionService.createSession(mistake.id));
+const beforeCleanupMessages = assertOk(services.aiSessionService.getSessionMessages(cleanupSession.id));
+assert(beforeCleanupMessages.length === 0, "New AI cleanup pollution session should start empty.");
+assertOk(await services.aiTextCleanupService.cleanupExtractedText(cleanupTextAttachment.id));
+const afterCleanupMessages = assertOk(services.aiSessionService.getSessionMessages(cleanupSession.id));
+assert(afterCleanupMessages.length === 0, "AI cleanup must not create AI session messages.");
+assertOk(services.aiSessionService.deleteSession(cleanupSession.id));
+
+fakeAiCleanupFailureCode = "AI_NETWORK_ERROR";
+const beforeFailedCleanupCache = assertOk(
+  services.attachmentTextExtractionService.getExtractedText(cleanupTextAttachment.id)
+);
+const failedCleanup = await services.aiTextCleanupService.cleanupExtractedText(cleanupTextAttachment.id);
+assert(
+  assertFail(failedCleanup) === "AI_CLEANUP_FAILED",
+  "AI cleanup provider failure should return a safe error."
+);
+assert(
+  !failedCleanup.ok && failedCleanup.error.message === "AI 网络请求失败，请检查网络或 provider 地址。",
+  "AI cleanup provider failure should return a specific safe user-facing message."
+);
+const afterFailedCleanupCache = assertOk(
+  services.attachmentTextExtractionService.getExtractedText(cleanupTextAttachment.id)
+);
+assert(
+  afterFailedCleanupCache.extractedText === beforeFailedCleanupCache.extractedText,
+  "Failed AI cleanup must not modify attachment_text_cache."
+);
+fakeAiCleanupFailureCode = "AI_TIMEOUT";
+const timeoutCleanup = await services.aiTextCleanupService.cleanupExtractedText(cleanupTextAttachment.id);
+assert(
+  assertFail(timeoutCleanup) === "AI_CLEANUP_FAILED",
+  "AI cleanup timeout should return the cleanup failed code."
+);
+assert(
+  !timeoutCleanup.ok &&
+    timeoutCleanup.error.message === "AI 排版请求超时，请稍后重试，或先手动删减文本后再试。",
+  "AI cleanup timeout should return a specific safe user-facing message."
+);
+fakeAiCleanupFailureCode = null;
+
+fakeAiCleanupResponse = "   ";
+const beforeEmptyCleanupCache = assertOk(
+  services.attachmentTextExtractionService.getExtractedText(cleanupTextAttachment.id)
+);
+assert(
+  assertFail(await services.aiTextCleanupService.cleanupExtractedText(cleanupTextAttachment.id)) ===
+    "AI_CLEANUP_FAILED",
+  "AI cleanup empty provider response should return a safe error."
+);
+const afterEmptyCleanupCache = assertOk(
+  services.attachmentTextExtractionService.getExtractedText(cleanupTextAttachment.id)
+);
+assert(
+  afterEmptyCleanupCache.extractedText === beforeEmptyCleanupCache.extractedText,
+  "Empty AI cleanup response must not modify attachment_text_cache."
+);
+fakeAiCleanupResponse = "AI cleaned text";
 
 const capabilities = assertOk(services.aiSessionService.getProviderCapabilities());
 assert(

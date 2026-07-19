@@ -6,6 +6,7 @@ import { getNoopReviewStatus } from "../extensions/review/noopReviewScheduler";
 import type {
   AiService,
   AiSessionService,
+  AiTextCleanupService,
   AttachmentTextExtractionService,
   ReviewService,
   SettingsService
@@ -19,6 +20,9 @@ const extractionUnavailable = () =>
     "EXTRACTION_NOT_AVAILABLE",
     "Attachment text extraction is unavailable until the database is ready."
   );
+
+const aiCleanupUnavailable = () =>
+  apiFail("AI_CLEANUP_NOT_CONFIGURED", "AI cleanup is unavailable until the database is ready.");
 
 const attachmentTextScopes = new Set<AttachmentTextScope>([
   "none",
@@ -62,6 +66,7 @@ const normalizeAiSendMessageOptions = (options: unknown): AiSendMessageOptions =
 export const registerExtensionsIpc = (
   aiService: AiService | null = null,
   aiSessionService: AiSessionService | null = null,
+  aiTextCleanupService: AiTextCleanupService | null = null,
   reviewService: ReviewService | null = null,
   attachmentTextExtractionService: AttachmentTextExtractionService | null = null,
   settingsService: SettingsService | null = null
@@ -194,6 +199,17 @@ export const registerExtensionsIpc = (
       }
 
       return attachmentTextExtractionService.getExtractedText(attachmentId);
+    }
+  );
+
+  ipcMain.handle(
+    ipcChannels.extensionExtractionCleanupExtractedText,
+    async (_event, attachmentId: string) => {
+      if (!aiTextCleanupService) {
+        return aiCleanupUnavailable();
+      }
+
+      return aiTextCleanupService.cleanupExtractedText(attachmentId);
     }
   );
 
