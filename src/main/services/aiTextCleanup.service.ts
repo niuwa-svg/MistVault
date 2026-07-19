@@ -26,8 +26,9 @@ const maxCleanupInputChars = 12_000;
 const cleanupMessages = {
   AI_CLEANUP_NOT_CONFIGURED: "AI 尚未启用或配置不完整，请先到设置中完成 AI 配置。",
   AI_CLEANUP_EMPTY_TEXT: "当前附件没有可整理的 OCR / 提取文本。",
-  AI_CLEANUP_TEXT_TOO_LONG: "提取文本过长，暂不支持直接 AI 整理，请先手动删减后再试。",
-  AI_CLEANUP_FAILED: "AI 整理失败，请稍后重试。"
+  AI_CLEANUP_TEXT_TOO_LONG: "提取文本过长，暂不支持直接 AI 排版，请先手动删减后再试。",
+  AI_CLEANUP_FORMULA_REWRITE: "AI 返回了疑似公式改写结果，已保留原文本，请手动整理。",
+  AI_CLEANUP_FAILED: "AI 排版失败，请稍后重试。"
 } as const;
 
 const providerFailureMessages: Record<AiProviderFailure["code"], string> = {
@@ -36,24 +37,77 @@ const providerFailureMessages: Record<AiProviderFailure["code"], string> = {
   AI_AUTH_ERROR: "AI 鉴权失败，请检查 API Key。",
   AI_RATE_LIMITED: "AI 请求被限流或余额不足，请稍后再试或检查 provider 账户。",
   AI_PROVIDER_ERROR: "AI provider 返回异常，请稍后再试。",
-  AI_TIMEOUT: "AI 整理请求超时，请稍后重试，或先手动删减文本后再试。",
-  AI_UNKNOWN_ERROR: "AI 整理失败，请稍后重试。"
+  AI_TIMEOUT: "AI 排版请求超时，请稍后重试，或先手动删减文本后再试。",
+  AI_UNKNOWN_ERROR: "AI 排版失败，请稍后重试。"
 };
 
 const conservativeCleanupInstruction = [
-  "你正在整理 OCR 提取的错题文本。",
-  "只做排版整理和明显 OCR 错误的保守修正。",
+  "你正在对 OCR 提取的错题纯文本进行保守的排版整理。",
+  "你只能调整换行、连续空格、连续空行、题号和选项的排列，以及普通中文段落的明显排版问题。",
+  "所有疑似数学公式、变量、数字、英文、运算符和特殊符号都必须尽量逐字符原样保留。",
+  "即使内容看起来有错误，也不要根据上下文修正、补全或猜测。",
+  "公式内容宁可保留 OCR 错误，也不能猜测修正。",
+  "不要添加上下标。",
+  "不要添加或删除数学符号。",
+  "不要转换为 Markdown 或 LaTeX。",
+  "不要添加美元符号、LaTeX 定界符或 LaTeX 命令。",
   "不要解题。",
   "不要补充题目中没有的信息。",
   "不要改写题意。",
-  "不要猜测不确定的公式。",
-  "无法确定的公式或符号用 [?] 标注。",
-  "保留题号。",
-  "保留 A/B/C/D 选项。",
-  "保留填空线索。",
-  "尽量保留原始数学符号。",
-  "输出整理后的文本，不要输出解释。"
+  "不要输出解释、标题或代码块。",
+  "只输出排版整理后的纯文本。"
 ].join("\n");
+
+const disallowedFormulaMarkers = [
+  "```",
+  "$$",
+  "$",
+  "^",
+  "\\(",
+  "\\)",
+  "\\[",
+  "\\]",
+  "\\frac",
+  "\\sqrt",
+  "\\int",
+  "\\sum",
+  "\\begin{",
+  "\\end{",
+  "⁰",
+  "¹",
+  "²",
+  "³",
+  "⁴",
+  "⁵",
+  "⁶",
+  "⁷",
+  "⁸",
+  "⁹",
+  "⁺",
+  "⁻",
+  "⁼",
+  "⁽",
+  "⁾",
+  "₀",
+  "₁",
+  "₂",
+  "₃",
+  "₄",
+  "₅",
+  "₆",
+  "₇",
+  "₈",
+  "₉",
+  "₊",
+  "₋",
+  "₌",
+  "₍",
+  "₎",
+  "ˣ"
+];
+
+const addsDisallowedOutputMarkup = (input: string, output: string): boolean =>
+  disallowedFormulaMarkers.some((marker) => !input.includes(marker) && output.includes(marker));
 
 const redactText = (value: string, knownSecrets: Array<string | null | undefined> = []): string => {
   let redacted = value
@@ -166,6 +220,12 @@ export class AiTextCleanupService {
       const cleanedText = response.content.trim();
       if (!cleanedText) {
         return serviceFail("AI_CLEANUP_FAILED", cleanupMessages.AI_CLEANUP_FAILED);
+      }
+      if (addsDisallowedOutputMarkup(input, cleanedText)) {
+        return serviceFail(
+          "AI_CLEANUP_FORMULA_REWRITE",
+          cleanupMessages.AI_CLEANUP_FORMULA_REWRITE
+        );
       }
 
       return serviceOk({

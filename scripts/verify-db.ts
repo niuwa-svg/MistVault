@@ -900,14 +900,23 @@ assert(
 );
 
 const cleanupSourceText = [
-  "1. 已知函数 f(x) = x^2，求导数。",
+  "1.下列说法正确的是 A.选项一 B.选项二 C.选项三 D.选项四",
+  "f(x) = x2e-x",
   "C:\\Users\\15268\\secret\\storedName.png relativePath attachments/question-stored.png",
   "image_url data:image/png;base64,abc secret-api-key"
 ].join("\n");
 assertOk(
   services.attachmentTextExtractionService.updateExtractedText(cleanupTextAttachment.id, cleanupSourceText)
 );
-fakeAiCleanupResponse = "1. 已知函数 f(x) = x^2，求导数。";
+fakeAiCleanupResponse = [
+  "1. 下列说法正确的是",
+  "",
+  "A. 选项一",
+  "B. 选项二",
+  "C. 选项三",
+  "D. 选项四",
+  "f(x) = x2e-x"
+].join("\n");
 const beforeCleanupCache = assertOk(
   services.attachmentTextExtractionService.getExtractedText(cleanupTextAttachment.id)
 );
@@ -922,10 +931,26 @@ assert(
 );
 const cleanupPromptText = JSON.stringify(capturedAiCleanupRequests.at(-1)?.messages ?? []);
 assert(
-  cleanupPromptText.includes("只做排版整理和明显 OCR 错误的保守修正"),
-  "AI cleanup prompt should include conservative cleanup instructions."
+  cleanupPromptText.includes("你只能调整换行、连续空格、连续空行、题号和选项的排列"),
+  "AI cleanup prompt should restrict cleanup to formatting."
+);
+assert(
+  cleanupPromptText.includes("公式内容宁可保留 OCR 错误，也不能猜测修正"),
+  "AI cleanup prompt should forbid formula guessing."
+);
+assert(
+  cleanupPromptText.includes("不要转换为 Markdown 或 LaTeX"),
+  "AI cleanup prompt should forbid Markdown and LaTeX conversion."
 );
 assert(cleanupPromptText.includes("不要解题"), "AI cleanup prompt should forbid solving.");
+assert(
+  !cleanupPromptText.includes("明显 OCR 错误的保守修正"),
+  "AI cleanup prompt must not ask the provider to fix OCR content."
+);
+assert(
+  !cleanupPromptText.includes("[?]"),
+  "AI cleanup prompt must not ask the provider to replace uncertain formulas."
+);
 assert(!cleanupPromptText.includes("C:\\Users"), "AI cleanup prompt must not include absolute paths.");
 assert(!cleanupPromptText.includes("storedName"), "AI cleanup prompt must not include storedName.");
 assert(!cleanupPromptText.includes("relativePath"), "AI cleanup prompt must not include relativePath.");
@@ -940,6 +965,15 @@ const afterCleanupCache = assertOk(
 assert(
   afterCleanupCache.extractedText === beforeCleanupCache.extractedText,
   "AI cleanup must not automatically write back to attachment_text_cache."
+);
+assert(
+  cleanupResult.cleanedText.includes("A. 选项一") &&
+    cleanupResult.cleanedText.includes("D. 选项四"),
+  "AI cleanup should allow option formatting."
+);
+assert(
+  cleanupResult.cleanedText.includes("f(x) = x2e-x"),
+  "AI cleanup should preserve formula-like OCR text exactly."
 );
 const savedCleanupText = assertOk(
   services.attachmentTextExtractionService.updateExtractedText(
@@ -960,6 +994,66 @@ assert(
   editedCleanup.cleanedText === "Edited cleanup text",
   "AI cleanup should accept manually edited extracted text."
 );
+
+assertOk(
+  services.attachmentTextExtractionService.updateExtractedText(cleanupTextAttachment.id, "f(x) = x2e-x")
+);
+fakeAiCleanupResponse = "$f(x)=x^2e^{-x}$";
+const beforeLatexRewriteCache = assertOk(
+  services.attachmentTextExtractionService.getExtractedText(cleanupTextAttachment.id)
+);
+const latexRewriteCleanup = await services.aiTextCleanupService.cleanupExtractedText(cleanupTextAttachment.id);
+assert(
+  assertFail(latexRewriteCleanup) === "AI_CLEANUP_FORMULA_REWRITE",
+  "AI cleanup should reject newly added LaTeX or Markdown formula markers."
+);
+assert(
+  !latexRewriteCleanup.ok &&
+    latexRewriteCleanup.error.message === "AI 返回了疑似公式改写结果，已保留原文本，请手动整理。",
+  "AI cleanup formula rewrite rejection should return a clear user-facing message."
+);
+const afterLatexRewriteCache = assertOk(
+  services.attachmentTextExtractionService.getExtractedText(cleanupTextAttachment.id)
+);
+assert(
+  afterLatexRewriteCache.extractedText === beforeLatexRewriteCache.extractedText,
+  "Rejected AI cleanup markup must not modify attachment_text_cache."
+);
+fakeAiCleanupResponse = "f(x)=x²e⁻ˣ";
+const unicodeSuperscriptCleanup = await services.aiTextCleanupService.cleanupExtractedText(
+  cleanupTextAttachment.id
+);
+assert(
+  assertFail(unicodeSuperscriptCleanup) === "AI_CLEANUP_FORMULA_REWRITE",
+  "AI cleanup should reject newly added Unicode superscript formula markers."
+);
+const afterUnicodeSuperscriptCache = assertOk(
+  services.attachmentTextExtractionService.getExtractedText(cleanupTextAttachment.id)
+);
+assert(
+  afterUnicodeSuperscriptCache.extractedText === beforeLatexRewriteCache.extractedText,
+  "Rejected AI cleanup Unicode superscripts must not modify attachment_text_cache."
+);
+assertOk(
+  services.attachmentTextExtractionService.updateExtractedText(cleanupTextAttachment.id, "普通 OCR 文本")
+);
+fakeAiCleanupResponse = "```text\n普通 OCR 文本\n```";
+const beforeCodeFenceCache = assertOk(
+  services.attachmentTextExtractionService.getExtractedText(cleanupTextAttachment.id)
+);
+assert(
+  assertFail(await services.aiTextCleanupService.cleanupExtractedText(cleanupTextAttachment.id)) ===
+    "AI_CLEANUP_FORMULA_REWRITE",
+  "AI cleanup should reject Markdown code fences in provider output."
+);
+const afterCodeFenceCache = assertOk(
+  services.attachmentTextExtractionService.getExtractedText(cleanupTextAttachment.id)
+);
+assert(
+  afterCodeFenceCache.extractedText === beforeCodeFenceCache.extractedText,
+  "Rejected AI cleanup code fences must not modify attachment_text_cache."
+);
+fakeAiCleanupResponse = "Edited cleanup text";
 
 fakeAiCleanupResponse = "Long cleanup text";
 const beforeLongCleanupRequestCount = capturedAiCleanupRequests.length;
@@ -1019,7 +1113,7 @@ assert(
 );
 assert(
   !timeoutCleanup.ok &&
-    timeoutCleanup.error.message === "AI 整理请求超时，请稍后重试，或先手动删减文本后再试。",
+    timeoutCleanup.error.message === "AI 排版请求超时，请稍后重试，或先手动删减文本后再试。",
   "AI cleanup timeout should return a specific safe user-facing message."
 );
 fakeAiCleanupFailureCode = null;

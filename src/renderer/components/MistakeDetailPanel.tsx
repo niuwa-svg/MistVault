@@ -231,8 +231,9 @@ const extractionErrorMessages: Record<string, string> = {
 const aiCleanupErrorMessages: Record<string, string> = {
   AI_CLEANUP_NOT_CONFIGURED: "AI 尚未启用或配置不完整，请先到设置中完成 AI 配置。",
   AI_CLEANUP_EMPTY_TEXT: "当前附件没有可整理的 OCR / 提取文本。",
-  AI_CLEANUP_TEXT_TOO_LONG: "提取文本过长，暂不支持直接 AI 整理，请先手动删减后再试。",
-  AI_CLEANUP_FAILED: "AI 整理失败，请稍后重试。"
+  AI_CLEANUP_TEXT_TOO_LONG: "提取文本过长，暂不支持直接 AI 排版，请先手动删减后再试。",
+  AI_CLEANUP_FORMULA_REWRITE: "AI 返回了疑似公式改写结果，已保留原文本，请手动整理。",
+  AI_CLEANUP_FAILED: "AI 排版失败，请稍后重试。"
 };
 
 const normalizeAttachmentExt = (attachment: Attachment): string =>
@@ -267,7 +268,7 @@ const aiCleanupErrorMessage = (code?: string | null, fallback?: string | null): 
   code === "AI_CLEANUP_FAILED" && fallback
     ? redactSensitiveText(fallback)
     : (code ? aiCleanupErrorMessages[code] : null) ??
-      redactSensitiveText(fallback || "AI 整理失败，请稍后重试。");
+      redactSensitiveText(fallback || "AI 排版失败，请稍后重试。");
 
 const aiErrorMessage = (code?: string | null, fallback?: string | null): string => {
   if (code && aiSessionErrorMessages[code]) {
@@ -727,7 +728,7 @@ const AttachmentTextExtractionPanel = ({
         setExpanded(true);
         setEditing(true);
         setAiCleanupDraftPending(true);
-        setMessage("AI 整理结果尚未保存，请人工核对后保存。");
+        setMessage("AI 排版结果尚未保存，请人工核对后保存。");
       } else {
         setMessage(aiCleanupErrorMessage(cleaned.error.code, cleaned.error.message));
       }
@@ -744,7 +745,7 @@ const AttachmentTextExtractionPanel = ({
   const statusText = unsupported
     ? "该文件类型暂不支持文本提取。"
     : aiCleanupBusy
-      ? "AI 整理中..."
+      ? "AI 排版中..."
     : currentStatus === "extracting" || busy
       ? "正在提取…"
       : currentStatus === "success"
@@ -784,7 +785,7 @@ const AttachmentTextExtractionPanel = ({
               onClick={() => void cleanupWithAi()}
               disabled={busy || aiCleanupBusy || !hasExtractedText}
             >
-              {aiCleanupBusy ? "AI 整理中..." : "AI 整理"}
+              {aiCleanupBusy ? "AI 排版中..." : "AI 排版"}
             </button>
             <button type="button" onClick={() => void copyText()} disabled={busy || aiCleanupBusy}>
               复制文本
@@ -803,6 +804,11 @@ const AttachmentTextExtractionPanel = ({
           </button>
         ) : null}
       </div>
+      {!unsupported && currentStatus === "success" ? (
+        <p className="state-text compact-state">
+          AI 排版仅整理当前 OCR 文本的排版，不会查看原图，不会自动保存。数学公式和题意请人工核对。
+        </p>
+      ) : null}
       {clearConfirmOpen ? (
         <div className="attachment-clear-confirm" role="dialog" aria-modal="true" aria-label="清除提取文本确认">
           <p>确定清除该附件的提取文本吗？原附件文件不会被删除。</p>
@@ -825,12 +831,12 @@ const AttachmentTextExtractionPanel = ({
               <textarea value={draft} onChange={(event) => setDraft(event.target.value)} disabled={busy} />
               {aiCleanupDraftPending ? (
                 <p className="state-text compact-state state-warning">
-                  AI 整理结果尚未保存，请人工核对后保存。
+                  AI 排版结果尚未保存，请人工核对后保存。
                 </p>
               ) : null}
               {aiCleanupDraftPending ? (
                 <p className="state-text compact-state">
-                  AI 整理仅辅助排版，数学公式和题意请人工核对。
+                  AI 排版仅辅助整理当前 OCR 文本，数学公式和题意请人工核对。
                 </p>
               ) : null}
               <div className="attachment-extraction-actions">
