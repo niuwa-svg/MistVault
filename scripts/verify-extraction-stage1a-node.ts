@@ -364,6 +364,22 @@ const assertOcrText = (text: string, label: string): void => {
   assert(text.includes("MistVault"), `${label} OCR did not include expected fixture text.`);
 };
 
+const countOptionBoundaries = (text: string): number =>
+  text
+    .split(/\r?\n/)
+    .reduce(
+      (count, line) =>
+        count + (line.match(/(?:^|[ \t])(?:[A-F][.．、)）]|[（(]\s*[A-Fa-f]\s*[）)])(?=[ \t]*\S)/g)?.length ?? 0),
+      0
+    );
+
+const assertOptionBoundaryCount = (text: string, expected: number, label: string): void => {
+  assert(
+    countOptionBoundaries(text) === expected,
+    `${label} should preserve ${expected} option boundaries.`
+  );
+};
+
 const assertOcrTextCleanup = (): void => {
   const dirty = [
     "  函 数   f ( x ) 在 区 间  ",
@@ -414,7 +430,55 @@ const assertOcrTextCleanup = (): void => {
   const choiceLines = choiceQuestion.split("\n");
   assert(choiceLines.filter((line) => /^\d+[.．、]\s/.test(line)).length === 1, "OCR cleanup should keep one numbered question line.");
   assert(choiceLines.filter((line) => /^[A-D][.．、]\s/.test(line)).length === 4, "OCR cleanup should keep A-D options as separate lines.");
+  assertOptionBoundaryCount(choiceQuestion, 4, "Standard separated options");
   assert(!choiceQuestion.includes("A. 选项一 B. 选项二"), "OCR cleanup should not merge adjacent option lines.");
+
+  const denseInlineOptions = cleanupOcrText("A. Alpha B. Beta C. Gamma D. Delta");
+  assertOptionBoundaryCount(denseInlineOptions, 4, "Dense inline options");
+  assert(!denseInlineOptions.includes("AlphaB."), "OCR cleanup should not swallow dense inline option spacing.");
+
+  const fullWidthParenthesizedOptions = cleanupOcrText("（A）选项一 （B）选项二 （C）选项三 （D）选项四");
+  assertOptionBoundaryCount(fullWidthParenthesizedOptions, 4, "Full-width parenthesized options");
+
+  const fullWidthClosingOptions = cleanupOcrText("A）选项一 B）选项二");
+  assertOptionBoundaryCount(fullWidthClosingOptions, 2, "Full-width closing parenthesis options");
+
+  const ideographicCommaOptions = cleanupOcrText("A、选项一 B、选项二");
+  assertOptionBoundaryCount(ideographicCommaOptions, 2, "Ideographic comma options");
+
+  const asciiParenthesizedOptions = cleanupOcrText("(A) option one (B) option two");
+  assertOptionBoundaryCount(asciiParenthesizedOptions, 2, "ASCII parenthesized options");
+
+  const formulaOptions = cleanupOcrText(
+    [
+      "A. f(x) = x2e-x",
+      "B. f(x) = x+1",
+      "C. x >= 0",
+      "D. x != 1"
+    ].join("\n")
+  );
+  assertOptionBoundaryCount(formulaOptions, 4, "Formula options");
+  assert(formulaOptions.includes("A. f(x) = x2e-x"), "OCR cleanup should preserve option formula f(x) = x2e-x.");
+  assert(formulaOptions.includes("B. f(x) = x + 1"), "OCR cleanup should preserve option formula f(x) = x+1 without changing formula characters.");
+  assert(formulaOptions.includes("C. x >= 0"), "OCR cleanup should preserve ASCII >= formula text.");
+  assert(formulaOptions.includes("D. x != 1"), "OCR cleanup should preserve ASCII != formula text.");
+
+  const englishBody = cleanupOcrText(
+    [
+      "Let A be a matrix and B be another matrix.",
+      "The CPU stores values in registers A and B.",
+      "A + B = C."
+    ].join("\n")
+  );
+  assert(englishBody === "Let A be a matrix and B be another matrix.\nThe CPU stores values in registers A and B.\nA + B = C.", "OCR cleanup should not split ordinary English or formula body text into options.");
+  assertOptionBoundaryCount(englishBody, 0, "Ordinary English body text");
+
+  const denseRealOptionSnippet = cleanupOcrText("(A) 1.25 % p.a (B) 2.5 % p.a. (C) 5 % p.a. (D) 6 % p.a");
+  assertOptionBoundaryCount(denseRealOptionSnippet, 4, "Real dense p.a option snippet");
+  assert(!denseRealOptionSnippet.includes("p.a(B)"), "OCR cleanup should not swallow p.a to option marker spacing.");
+
+  const englishReferenceSnippet = cleanupOcrText("Select the option that is True from (a)-(c) given below.");
+  assert(englishReferenceSnippet.includes("from (a)-(c)"), "OCR cleanup should not swallow prose to parenthesized option-reference spacing.");
 
   const formulaMix = cleanupOcrText(["设函数", "f(x) = x2e-x", "则下列结论正确的是"].join("\n"));
   assert(formulaMix === "设函数\nf(x) = x2e-x\n则下列结论正确的是", "OCR cleanup should preserve formula lines without rewriting formula text.");

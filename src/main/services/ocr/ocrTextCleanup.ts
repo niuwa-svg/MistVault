@@ -2,22 +2,26 @@ const cjkChar = "\u3400-\u9fff\uf900-\ufaff";
 const cjkPunctuation = "，。！？；：、";
 const closingPunctuation = "）】》〉」』";
 const openingPunctuation = "（【《〈「『";
-const optionLinePattern = /^(?:[A-F][.．、)]|[（(][A-F][）)]|[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳])(?:\s|$)/;
+const optionLinePattern = /^(?:[A-F][.．、)）]|[（(]\s*[A-Fa-f]\s*[）)]|[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳])(?:\s|$)/;
 const numberedLinePattern = /^(?:\d{1,3}|[一二三四五六七八九十]{1,4})[.．、)](?:\s|$)/;
 const subQuestionLinePattern = /^(?:[（(]\s*(?:\d{1,3}|[一二三四五六七八九十]{1,4})\s*[）)]|[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳])(?:\s|$)/;
-const protectedLinePrefixPattern = /^((?:[A-F][.．、)]|[（(][A-F][）)]|[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]|(?:\d{1,3}|[一二三四五六七八九十]{1,4})[.．、)]|[（(]\s*(?:\d{1,3}|[一二三四五六七八九十]{1,4})\s*[）)]))\s*/;
+const protectedLinePrefixPattern = /^((?:[A-F][.．、)）]|[（(]\s*[A-Fa-f]\s*[）)]|[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]|(?:\d{1,3}|[一二三四五六七八九十]{1,4})[.．、)]|[（(]\s*(?:\d{1,3}|[一二三四五六七八九十]{1,4})\s*[）)]))\s*/;
 const sentenceEndPattern = /[。！？!?；;：:）)]$/;
 const formulaTokenPattern = /[=+×÷≤≥≠≈∫∑√^_]|[A-Za-z0-9)]\s*[-*/]\s*[A-Za-z0-9(]|[A-Za-z]\s*\([^)]{0,40}\)|(?:\d\s*[A-Za-z]|[A-Za-z]\s*\d)/;
+const parenthesizedOptionArgumentPattern = /^[A-Fa-f]$/;
 
 const normalizeMathSpacing = (line: string): string =>
   line
     .replace(/\b([A-Za-z]{1,6})\s+\(\s*([A-Za-z0-9_+\-*/^]+(?:\s*[,，]\s*[A-Za-z0-9_+\-*/^]+)*)\s*\)/g, (_match, name: string, args: string) => {
       const normalizedArgs = args.replace(/\s*[,，]\s*/g, ", ");
+      if (parenthesizedOptionArgumentPattern.test(normalizedArgs)) {
+        return `${name} (${normalizedArgs})`;
+      }
       return `${name}(${normalizedArgs})`;
     })
     .replace(/([A-Za-z0-9)\]}])\s*\^\s*([A-Za-z0-9({\[])/g, "$1^$2")
     .replace(/([A-Za-z0-9)\]}])\s*_\s*([A-Za-z0-9({\[])/g, "$1_$2")
-    .replace(/\s*([=+×÷≤≥≠≈])\s*/g, " $1 ")
+    .replace(/\s*(>=|<=|!=|==|[=+×÷≤≥≠≈])\s*/g, " $1 ")
     .replace(/[ \t\f\v\u00a0]{2,}/g, " ")
     .trim();
 
