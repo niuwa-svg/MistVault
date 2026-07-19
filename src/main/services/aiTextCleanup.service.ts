@@ -20,7 +20,7 @@ const supportedOpenAiCompatibleProviders = new Set<AiProvider>([
   "doubao"
 ]);
 const unsupportedProviders = new Set<AiProvider>(["claude", "gemini"]);
-const timeoutMs = 60_000;
+const timeoutMs = 180_000;
 const maxCleanupInputChars = 12_000;
 
 const cleanupMessages = {
@@ -36,7 +36,7 @@ const providerFailureMessages: Record<AiProviderFailure["code"], string> = {
   AI_AUTH_ERROR: "AI 鉴权失败，请检查 API Key。",
   AI_RATE_LIMITED: "AI 请求被限流或余额不足，请稍后再试或检查 provider 账户。",
   AI_PROVIDER_ERROR: "AI provider 返回异常，请稍后再试。",
-  AI_TIMEOUT: "AI 请求超时，请稍后重试。",
+  AI_TIMEOUT: "AI 整理请求超时，请稍后重试，或先手动删减文本后再试。",
   AI_UNKNOWN_ERROR: "AI 整理失败，请稍后重试。"
 };
 

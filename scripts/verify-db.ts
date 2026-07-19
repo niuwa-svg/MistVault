@@ -210,7 +210,7 @@ await verifyOcrRegistryFallback();
 const capturedAiRequests: AiProviderRequest[] = [];
 const capturedAiCleanupRequests: AiProviderRequest[] = [];
 let fakeAiShouldFail = false;
-let fakeAiCleanupShouldFail = false;
+let fakeAiCleanupFailureCode: AiProviderFailure["code"] | null = null;
 let fakeAiCleanupResponse = "AI cleaned text";
 const fakeAiProvider: AiProviderAdapter = {
   async explain(request: AiProviderRequest): Promise<AiProviderResponse> {
@@ -224,8 +224,8 @@ const fakeAiProvider: AiProviderAdapter = {
 const fakeAiCleanupProvider: AiProviderAdapter = {
   async explain(request: AiProviderRequest): Promise<AiProviderResponse> {
     capturedAiCleanupRequests.push(request);
-    if (fakeAiCleanupShouldFail) {
-      throw new AiProviderFailure("AI_NETWORK_ERROR", "Cleanup provider failed with secret-api-key at C:\\Users\\15268\\cleanup.txt");
+    if (fakeAiCleanupFailureCode) {
+      throw new AiProviderFailure(fakeAiCleanupFailureCode, "Cleanup provider failed with secret-api-key at C:\\Users\\15268\\cleanup.txt");
     }
     return { content: fakeAiCleanupResponse };
   }
@@ -916,6 +916,10 @@ const cleanupResult = assertOk(
 );
 assert(cleanupResult.cleanedText === fakeAiCleanupResponse, "AI cleanup should return provider output.");
 assert(cleanupResult.provider === "openai", "AI cleanup should report the configured provider.");
+assert(
+  capturedAiCleanupRequests.at(-1)?.config.timeoutMs === 180_000,
+  "AI cleanup should use a longer timeout for OCR text cleanup."
+);
 const cleanupPromptText = JSON.stringify(capturedAiCleanupRequests.at(-1)?.messages ?? []);
 assert(
   cleanupPromptText.includes("只做排版整理和明显 OCR 错误的保守修正"),
@@ -987,7 +991,7 @@ const afterCleanupMessages = assertOk(services.aiSessionService.getSessionMessag
 assert(afterCleanupMessages.length === 0, "AI cleanup must not create AI session messages.");
 assertOk(services.aiSessionService.deleteSession(cleanupSession.id));
 
-fakeAiCleanupShouldFail = true;
+fakeAiCleanupFailureCode = "AI_NETWORK_ERROR";
 const beforeFailedCleanupCache = assertOk(
   services.attachmentTextExtractionService.getExtractedText(cleanupTextAttachment.id)
 );
@@ -1007,7 +1011,18 @@ assert(
   afterFailedCleanupCache.extractedText === beforeFailedCleanupCache.extractedText,
   "Failed AI cleanup must not modify attachment_text_cache."
 );
-fakeAiCleanupShouldFail = false;
+fakeAiCleanupFailureCode = "AI_TIMEOUT";
+const timeoutCleanup = await services.aiTextCleanupService.cleanupExtractedText(cleanupTextAttachment.id);
+assert(
+  assertFail(timeoutCleanup) === "AI_CLEANUP_FAILED",
+  "AI cleanup timeout should return the cleanup failed code."
+);
+assert(
+  !timeoutCleanup.ok &&
+    timeoutCleanup.error.message === "AI 整理请求超时，请稍后重试，或先手动删减文本后再试。",
+  "AI cleanup timeout should return a specific safe user-facing message."
+);
+fakeAiCleanupFailureCode = null;
 
 fakeAiCleanupResponse = "   ";
 const beforeEmptyCleanupCache = assertOk(
