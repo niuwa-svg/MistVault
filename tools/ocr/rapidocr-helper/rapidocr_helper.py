@@ -20,6 +20,13 @@ MODEL_FILES = {
     "cls": "ch_ppocr_mobile_v2.0_cls_mobile.onnx",
 }
 MAX_MESSAGE_LENGTH = 300
+UNICODE_PROTOCOL_SAMPLE = "\n".join([
+    "中文测试",
+    "∫ ∑ √ × ÷ ≤ ≥ ≠ α β θ ² ³ ⁻ ˣ ₁ ₂ →",
+    "f(x) = x2e-x",
+    "A. 选项一",
+    "第 1 题",
+])
 _DLL_DIRECTORY_HANDLES: list[object] = []
 _DLL_LIBRARY_HANDLES: list[object] = []
 
@@ -209,7 +216,22 @@ def _json_failure(error_code: str, message: object, elapsed_ms: int = 0) -> dict
 
 
 def _emit(payload: dict[str, Any]) -> None:
-    print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), flush=True)
+    print(json.dumps(payload, ensure_ascii=True, separators=(",", ":")), flush=True)
+
+
+def _json_unicode_protocol_probe() -> dict[str, Any]:
+    return _json_success(
+        0,
+        UNICODE_PROTOCOL_SAMPLE,
+        [
+            {
+                "text": UNICODE_PROTOCOL_SAMPLE,
+                "confidence": 1.0,
+                "box": None,
+            }
+        ],
+        None,
+    )
 
 
 def _parse_args(argv: list[str]) -> tuple[Path | None, dict[str, Any] | None]:
@@ -345,6 +367,10 @@ def main(argv: list[str] | None = None) -> int:
     actual_argv = sys.argv[1:] if argv is None else argv
     if getattr(sys, "frozen", False) and os.environ.get("MISTVAULT_RAPIDOCR_HELPER_CHILD") != "1":
         return _run_embedded_python_child(actual_argv)
+
+    if "--verify-unicode-protocol" in actual_argv:
+        _emit(_json_unicode_protocol_probe())
+        return 0
 
     image_path, arg_error = _parse_args(actual_argv)
     if arg_error is not None:

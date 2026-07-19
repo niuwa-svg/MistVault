@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { userInfo } from "node:os";
 import { join } from "node:path";
@@ -15,6 +16,13 @@ const runtimeRoot = join(root, "resources", "ocr", "rapidocr");
 const fixturePath = join(root, "resources", "ocr", "fixtures", "phase0-zh-en.png");
 const tmpRoot = join(root, ".tmp", `verify-rapidocr-runtime-${randomUUID()}`);
 const chineseOcrSample = "中文测试：函数、导数、答案解析、错题本";
+const unicodeProtocolSample = [
+  "中文测试",
+  "∫ ∑ √ × ÷ ≤ ≥ ≠ α β θ ² ³ ⁻ ˣ ₁ ₂ →",
+  "f(x) = x2e-x",
+  "A. 选项一",
+  "第 1 题"
+].join("\n");
 
 const dataDirectoryInfo: DataDirectoryInfo = {
   path: tmpRoot,
@@ -141,6 +149,53 @@ const verifyUtf8JsonRoundTrip = (): void => {
   assert(legacyParsed.blocks?.[0]?.text === chineseOcrSample, "Legacy helper JSON block text was not decoded from GBK.");
 };
 
+const verifyHelperUnicodeProtocol = async (rapidStatus: RapidStatus): Promise<void> => {
+  const stdoutChunks: Buffer[] = [];
+  const stderrChunks: Buffer[] = [];
+  const code = await new Promise<number | null>((resolve, reject) => {
+    const child = spawn(rapidStatus.helperPath, ["--verify-unicode-protocol", "--json"], {
+      cwd: rapidStatus.rootPath,
+      env: {
+        ...process.env,
+        PYTHONIOENCODING: "utf-8",
+        PYTHONUTF8: "1"
+      },
+      windowsHide: true
+    });
+
+    child.stdout.on("data", (chunk) => {
+      stdoutChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf8"));
+    });
+    child.stderr.on("data", (chunk) => {
+      stderrChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf8"));
+    });
+    child.on("error", reject);
+    child.on("close", resolve);
+  });
+
+  const stdoutBuffer = Buffer.concat(stdoutChunks);
+  const stderr = decodeRapidOcrHelperOutput(Buffer.concat(stderrChunks));
+  assert(code === 0, `RapidOCR helper Unicode protocol probe exited with ${code ?? "unknown"}: ${stderr}`);
+  assert(stdoutBuffer.length > 0, "RapidOCR helper Unicode protocol probe returned empty stdout.");
+  assert(
+    stdoutBuffer.every((byte) => byte < 0x80),
+    "RapidOCR helper Unicode protocol probe stdout was not ASCII-safe JSON."
+  );
+
+  const parsed = JSON.parse(decodeRapidOcrHelperOutput(stdoutBuffer)) as {
+    ok?: unknown;
+    text?: unknown;
+    blocks?: Array<{ text?: unknown }>;
+  };
+
+  assert(parsed.ok === true, "RapidOCR helper Unicode protocol probe did not return ok:true.");
+  assert(parsed.text === unicodeProtocolSample, "RapidOCR helper Unicode protocol text was not preserved.");
+  assert(
+    parsed.blocks?.[0]?.text === unicodeProtocolSample,
+    "RapidOCR helper Unicode protocol block text was not preserved."
+  );
+};
+
 export default async function verifyRapidOcrRuntime(): Promise<void> {
   let runError: unknown = null;
   try {
@@ -156,6 +211,7 @@ export default async function verifyRapidOcrRuntime(): Promise<void> {
     assert(rapidStatus.runtimeExists, "RapidOCR runtime/ directory was not found.");
     assert(rapidStatus.modelsExists, "RapidOCR models/ directory was not found.");
     assert(rapidStatus.available, "RapidOCR runtime is not available.");
+    await verifyHelperUnicodeProtocol(rapidStatus);
 
     const rapidEngine = new RapidOcrEngine(runtimeService, dataDirectoryInfo);
     const rapidResult = await rapidEngine.recognize({ absolutePath: fixturePath }, { timeoutMs: 30_000 });
@@ -227,7 +283,8 @@ export default async function verifyRapidOcrRuntime(): Promise<void> {
             engineVersion: rapidStatus.engineVersion,
             textLength: rapidResult.text.length,
             blockCount: rapidResult.blocks.length,
-            chineseUtf8RoundTrip: true
+            chineseUtf8RoundTrip: true,
+            unicodeProtocolRoundTrip: true
           },
           fallback: {
             runtimeMissing: true,
