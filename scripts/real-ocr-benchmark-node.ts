@@ -33,6 +33,7 @@ type EngineSummary = {
   engine: OcrEngineName;
   engineVersion: string | null;
   elapsedMs: number;
+  wallElapsedMs: number;
   textLength: number;
   lineCount: number;
   cleanedLength: number;
@@ -127,13 +128,18 @@ const levenshteinSimilarity = (actual: string, expected?: string): number | null
 
 const lineCount = (value: string): number => value.trim() ? value.trim().split(/\r?\n/).length : 0;
 
-const summarizeResult = (result: OcrEngineResult, referenceText?: string): EngineSummary => {
+const summarizeResult = (
+  result: OcrEngineResult,
+  wallElapsedMs: number,
+  referenceText?: string
+): EngineSummary => {
   const cleanedText = result.ok ? cleanupOcrText(result.text) : "";
   return {
     ok: result.ok,
     engine: result.engine,
     engineVersion: result.engineVersion,
     elapsedMs: result.elapsedMs,
+    wallElapsedMs,
     textLength: result.text.length,
     lineCount: lineCount(result.text),
     cleanedLength: cleanedText.length,
@@ -211,7 +217,14 @@ const createDataDirectoryInfo = (): DataDirectoryInfo => {
 const runEngine = async (
   engine: OcrEngine | Pick<OcrEngineRegistry, "recognize">,
   absolutePath: string
-): Promise<OcrEngineResult> => engine.recognize({ absolutePath }, { timeoutMs });
+): Promise<{ result: OcrEngineResult; wallElapsedMs: number }> => {
+  const startedAt = Date.now();
+  const result = await engine.recognize({ absolutePath }, { timeoutMs });
+  return {
+    result,
+    wallElapsedMs: Date.now() - startedAt
+  };
+};
 
 const resolveSamplePath = (manifestPath: string, imagePath: string): string =>
   isAbsolute(imagePath) ? imagePath : resolve(dirname(manifestPath), imagePath);
@@ -234,9 +247,12 @@ export default async function runRealOcrBenchmark(): Promise<void> {
   for (const sample of manifest.samples) {
     const absolutePath = resolveSamplePath(manifestPath, sample.imagePath);
     const image = detectImageInfo(absolutePath);
-    const rapidResult = await runEngine(rapidEngine, absolutePath);
-    const tesseractResult = await runEngine(tesseractEngine, absolutePath);
-    const registryResult = await runEngine(registry, absolutePath);
+    const rapidRun = await runEngine(rapidEngine, absolutePath);
+    const tesseractRun = await runEngine(tesseractEngine, absolutePath);
+    const registryRun = await runEngine(registry, absolutePath);
+    const rapidResult = rapidRun.result;
+    const tesseractResult = tesseractRun.result;
+    const registryResult = registryRun.result;
 
     writeFileSync(
       join(outputDir, `${sample.id}.raw.json`),
@@ -251,6 +267,11 @@ export default async function runRealOcrBenchmark(): Promise<void> {
             rapidocr: rapidResult.ok ? cleanupOcrText(rapidResult.text) : "",
             tesseract: tesseractResult.ok ? cleanupOcrText(tesseractResult.text) : "",
             registry: registryResult.ok ? cleanupOcrText(registryResult.text) : ""
+          },
+          timing: {
+            rapidocrWallElapsedMs: rapidRun.wallElapsedMs,
+            tesseractWallElapsedMs: tesseractRun.wallElapsedMs,
+            registryWallElapsedMs: registryRun.wallElapsedMs
           }
         },
         null,
@@ -269,9 +290,9 @@ export default async function runRealOcrBenchmark(): Promise<void> {
       expectedFeatures: sample.expectedFeatures ?? [],
       image,
       engines: {
-        rapidocr: summarizeResult(rapidResult, sample.referenceText),
-        tesseract: summarizeResult(tesseractResult, sample.referenceText),
-        registry: summarizeResult(registryResult, sample.referenceText)
+        rapidocr: summarizeResult(rapidResult, rapidRun.wallElapsedMs, sample.referenceText),
+        tesseract: summarizeResult(tesseractResult, tesseractRun.wallElapsedMs, sample.referenceText),
+        registry: summarizeResult(registryResult, registryRun.wallElapsedMs, sample.referenceText)
       }
     });
   }
